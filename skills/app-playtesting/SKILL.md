@@ -21,6 +21,12 @@ the question to answer. Record destructive, account, ad and purchase boundaries.
 Use a test account/debug build where appropriate. Stop at an unexpected consent,
 payment, permission or account choice; do not guess or bypass it.
 
+App-specific companion skills may require this skill. They must pin the required
+repository revision/path and verify it is available before testing; installation
+does not automatically resolve dependencies. A missing required skill stops input,
+not a silent return to a copied procedure. Follow [Android setup](references/android-setup.md)
+and [execution](references/android-execution.md) for that adapter's canonical details.
+
 Check your real capabilities: can you inspect a screenshot, target the intended
 device, send a reversible input and release any held contact? If not, explain
 the missing capability. Do not pretend a text description is a screen capture.

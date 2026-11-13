@@ -6,23 +6,11 @@ injectors, change security settings or attach an unrelated device as a workaroun
 
 ## Android with ADB
 
-The owner enables debugging and authorises the selected phone. Privately identify
-it with `adb devices -l`; pass its explicit serial on every command. Never publish
-serials. Baseline operations include `adb -s SERIAL shell input tap X Y` and
-`adb -s SERIAL shell input swipe X1 Y1 X2 Y2 MILLISECONDS`. These are examples,
-not a queue to execute or proof that a long swipe simulates every contact gesture.
-
-Capture original PNG bytes using `adb -s SERIAL exec-out screencap -p` through
-a binary-safe process API or transport. Text pipelines can corrupt binary data,
-particularly on some Windows shells. Verify the PNG and inspect it. If capture
-fails, use an available supported screenshot route or ask for a manual screenshot.
-
-A persistent control shell, finite batches and continuous contact are optional
-optimisations. Test device support on a reversible interaction. Use a separate
-capture connection; preserve command boundaries and completion markers. Release
-contact explicitly on success and failure. After transport loss, inspect partial
-effects before reverting to individual ADB calls. Do not launch competing input
-streams or assume parallel swipes implement multitouch.
+Use [Android setup](android-setup.md) and [execution/capture/recovery](android-execution.md).
+Those are the canonical procedures for authorisation, explicit targeting, binary
+capture, finite batches, contact release, recording and the fallback ladder.
+App-specific skills link to them instead of keeping copies; calibrated app data
+belongs in the app profile. No separate setup procedure is maintained here.
 
 ## Browser, desktop and iOS
 

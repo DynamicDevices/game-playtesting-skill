@@ -27,6 +27,9 @@ does not give Claude Desktop, Claude Code or any other agent those capabilities.
 
 - [Controlled exploration and state-based testing](skills/app-playtesting/references/method.md).
 - [Portable device/browser adapters and fallbacks](skills/app-playtesting/references/adapters.md).
+- Canonical [Android setup](skills/app-playtesting/references/android-setup.md) and
+  [execution/capture/recovery](skills/app-playtesting/references/android-execution.md)
+  for companion skills to require rather than duplicate.
 - [Bugs, usability, disengagement and creative suggestions](skills/app-playtesting/references/developer-feedback.md).
 - [Experiment and A/B-test planning](skills/app-playtesting/references/experiments.md).
 - [Optional developer debug-build interface](skills/app-playtesting/references/debug-builds.md).

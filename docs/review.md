@@ -1,5 +1,17 @@
 # Development-candidate checks
 
+The dependency refactor moves Android setup, execution, crop mapping and recovery
+into canonical references in this repository. Nail Reveal must require a pinned
+copy rather than retain a standalone duplicate. Historical observations remain
+in its own recipe/evidence records. No live device test was performed by this
+refactor.
+
+During static scanning, the attribution phrase ending in the game title followed
+by “instructions” produced a HIGH prompt-extraction false positive. The snippet
+was an MIT attribution, not a request for hidden instructions. It was reworded
+to identify the `nail-reveal` skill unambiguously; no security rule was removed
+and no baseline/suppression was introduced.
+
 Briar's implementation self-review, not independent approval:
 
 - Thirteen offline tests passed: package/relative-link portability, metadata,
