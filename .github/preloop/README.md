@@ -75,6 +75,22 @@ an exact matching prior review. Durable trigger intent prevents duplicate spend;
 an interrupted/ambiguous launch needs explicit reconciliation, not another click.
 Artifact expiry fails closed and requires a separately approved recovery route.
 
+A signed completion with `result_ready: false` is a service error, not permission
+to fetch repeatedly or accept a later unsigned result. It needs a new authenticated
+ready completion with its own result digest. A ready completion permits one result
+fetch per invocation. HTTP 200 error objects, unavailable results and failed schema
+validation remain errors. Preserve the failure, correct or reconcile that phase,
+then explicitly invoke publication-only recovery against the same authenticated
+execution; do not start another model run to recover a post or an artifact.
+
+Even error-status publication requires durable trigger intent/receipt ownership,
+the signed model/configuration binding, matching execution/completion, a current
+PR and no newer or ambiguously ordered execution. If any check fails, make no
+status write. `preloop-failure-EXECUTION` records the failed publication run, error
+class and whether an error status was confirmed, without raw exceptions, tokens
+or service logs. Error-reporting failure must not hide the original failure.
+Complete validated findings from FAILED executions remain visible but never green.
+
 ## Signed policy and remaining acceptance work
 
 `PRELOOP_PUBLICATION_AUTHORITY` and `PRELOOP_PUBLICATION_SIGNATURE` must preserve

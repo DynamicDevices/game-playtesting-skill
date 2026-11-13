@@ -1,5 +1,6 @@
 """Exercise the actual publisher entry point with isolated fake APIs."""
 import copy
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -36,6 +37,9 @@ class PublisherTests(unittest.TestCase):
                                event_id='73db8ab4-33db-4359-a135-9f20edc61ff8',
                                result_sha256=canonical_digest(self.result))
         self.reviews, self.checks, self.statuses, self.calls = [], [], [], []
+        self.preloop_calls = []
+        self.result_failure = None
+        self.history = [self.detail]
         self.fail_review = False
         self.readback_actor = 'github-actions[bot]'
         self.event = Path(self.temp.name) / 'event.json'
@@ -81,7 +85,10 @@ class PublisherTests(unittest.TestCase):
 
     def preloop(self, path, _token, method='GET', body=None):
         self.assertEqual(method, 'GET', 'Publisher must never trigger another review')
+        self.preloop_calls.append(path)
         if path.endswith('/result'):
+            if self.result_failure:
+                raise self.result_failure
             return dict(execution_id=self.eid, status=self.detail['status'], result=self.result,
                         **self.result_envelope)
         return self.detail
@@ -89,19 +96,19 @@ class PublisherTests(unittest.TestCase):
     def pages(self, _github, path, field=None):
         return list(self.reviews) if path.endswith('/reviews') else list(self.checks)
 
-    def run_publisher(self, stale=False):
+    def run_publisher(self, stale=False, entry=None):
         self.completion['result_sha256'] = canonical_digest(self.result)
         patches = [patch.object(publisher.runtime, 'context', return_value=(self.binding, {}, self.github)),
                    patch.object(publisher.runtime, 'artifact', side_effect=self.artifacts),
                    patch.object(publisher.runtime, 'preloop', side_effect=self.preloop),
                    patch.object(publisher.runtime, 'full_diff_sha256', return_value='c' * 64),
-                   patch.object(publisher.runtime, 'executions', return_value=[self.detail]),
+                   patch.object(publisher.runtime, 'executions', return_value=self.history),
                    patch.object(publisher.runtime, 'github_pages', side_effect=self.pages),
                    patch.object(publisher.runtime, 'current_pr', side_effect=InvalidReview('Stale PR') if stale else None)]
         for item in patches:
             item.start()
         try:
-            return publisher.publish()
+            return (entry or publisher.publish)()
         finally:
             for item in reversed(patches):
                 item.stop()
@@ -112,6 +119,64 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(self.checks[0]['conclusion'], 'success')
         self.assertIn(self.eid, self.reviews[0]['body'])
         self.assertTrue((Path(self.temp.name) / 'preloop-publication/receipt.json').exists())
+
+    def failure_receipt(self):
+        return json.loads((Path(self.temp.name) / 'preloop-failure/receipt.json').read_text())
+
+    def test_not_ready_never_fetches_result_or_creates_review(self):
+        self.completion.update(result_ready=False, result_sha256=None, status='FAILED')
+        self.detail['status'] = 'FAILED'
+        with self.assertRaisesRegex(InvalidReview, 'no result'):
+            self.run_publisher(entry=publisher.run_publication)
+        self.assertFalse(any(path.endswith('/result') for path in self.preloop_calls))
+        self.assertFalse(self.reviews or self.checks)
+        self.assertEqual(self.statuses[0]['state'], 'error')
+        self.assertTrue(self.failure_receipt()['error_status_confirmed'])
+
+    def test_result_race_is_one_fetch_then_publication_only_recovery(self):
+        self.result_failure = OSError('fixture result not yet available')
+        with self.assertRaises(OSError):
+            self.run_publisher(entry=publisher.run_publication)
+        self.assertEqual(sum(path.endswith('/result') for path in self.preloop_calls), 1)
+        self.assertFalse(self.reviews or self.checks)
+        self.assertEqual(self.statuses[0]['state'], 'error')
+        self.assertEqual(self.failure_receipt()['failure_type'], 'OSError')
+        # A later explicitly invoked recovery uses this same owned completion.
+        self.result_failure = None
+        self.assertEqual(self.run_publisher(entry=publisher.run_publication), 0)
+        self.assertEqual(len(self.reviews), 1)
+        self.assertEqual(self.statuses[0]['state'], 'success')
+
+    def test_http_200_error_cannot_become_review_or_success(self):
+        self.result_envelope['error'] = {'code': 'result_unavailable'}
+        with self.assertRaises(InvalidReview):
+            self.run_publisher(entry=publisher.run_publication)
+        self.assertFalse(self.reviews or self.checks)
+        self.assertEqual(self.statuses[0]['state'], 'error')
+        self.assertTrue(self.failure_receipt()['error_status_confirmed'])
+
+    def test_error_status_denies_unowned_trigger_receipt(self):
+        self.receipt['challenge'] = 'e' * 48
+        with self.assertRaisesRegex(InvalidReview, 'Trigger receipt changed'):
+            self.run_publisher(entry=publisher.run_publication)
+        self.assertFalse(self.calls)
+        self.assertFalse(self.failure_receipt()['error_status_confirmed'])
+
+    def test_error_status_denies_superseded_execution(self):
+        self.result_failure = OSError('fixture unavailable')
+        self.history.append(dict(self.detail, id='newer', start_time='2026-11-13T15:01:00Z'))
+        with self.assertRaises(OSError):
+            self.run_publisher(entry=publisher.run_publication)
+        self.assertFalse(self.calls)
+        self.assertFalse(self.failure_receipt()['error_status_confirmed'])
+
+    def test_error_status_denies_stale_pr_and_preserves_original_failure(self):
+        self.result_failure = OSError('fixture unavailable')
+        with self.assertRaises(OSError):
+            self.run_publisher(stale=True, entry=publisher.run_publication)
+        self.assertFalse(self.calls)
+        self.assertEqual(self.failure_receipt()['failure_type'], 'OSError')
+        self.assertFalse(self.failure_receipt()['error_status_confirmed'])
 
     def test_documented_metadata_is_kept_in_receipt_not_posted_as_findings(self):
         self.result['container_termination'] = {'reason': 'completed', 'exit_code': 0}

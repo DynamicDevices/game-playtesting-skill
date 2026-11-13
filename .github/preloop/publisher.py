@@ -6,7 +6,7 @@ import re
 import sys
 import time
 
-from bound_review import bind_completed_review
+from bound_review import bind_completed_review, bind_owned_execution
 from completion_contract import verify_dispatch
 from review_contract import require, review_body
 import runtime
@@ -46,10 +46,8 @@ def no_supersession(binding, token, completion):
                     'A newer or ambiguously ordered review supersedes this result')
 
 
-def publish():
-    binding, _workload, github = runtime.context('preloop-review-publish.yml')
-    event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
-    eid = os.environ['PRELOOP_EXECUTION_ID']
+def owned_receipts(github, binding, eid):
+    """The error path must prove the same durable ownership as review publication."""
     require(re.fullmatch('[0-9a-f-]{36}', eid), 'Invalid execution ID')
     wake = runtime.artifact(github, binding, 'preloop-wake-' + eid,
                             'preloop-review-publish.yml', run_id=os.environ['GITHUB_RUN_ID'],
@@ -64,8 +62,19 @@ def publish():
     require(receipt['model_id'] == binding['model_id'] and
             receipt['flow_config_sha256'] == binding['native_ci_contract']['flow_config_sha256'],
             'Native model/configuration differs from signed policy')
+    return completion, intent, receipt
+
+
+def publish():
+    binding, _workload, github = runtime.context('preloop-review-publish.yml')
+    event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+    eid = os.environ['PRELOOP_EXECUTION_ID']
+    completion, intent, receipt = owned_receipts(github, binding, eid)
     token = os.environ['PRELOOP_CI_TOKEN']
     detail = runtime.preloop('/flows/executions/' + eid, token)
+    bind_owned_execution(completion, intent, receipt, detail)
+    require(completion.get('result_ready') is True,
+            'Signed completion has no result; require a new authenticated ready completion')
     # Fetch a ready result even on FAILED so genuine findings are not discarded.
     artifact = runtime.preloop('/flows/executions/' + eid + '/result', token)
     digest = runtime.full_diff_sha256(binding['repository'], receipt['base_sha'], receipt['head_sha'],
@@ -139,26 +148,38 @@ def publish_error_status():
     """An error needs authenticated target/ownership, never an invented clean review."""
     binding, _workload, github = runtime.context('preloop-review-publish.yml')
     eid = os.environ['PRELOOP_EXECUTION_ID']
-    wake = runtime.artifact(github, binding, 'preloop-wake-' + eid,
-                            'preloop-review-publish.yml', run_id=os.environ['GITHUB_RUN_ID'],
-                            allow_current=True)
-    completion = wake['completion']
+    completion, intent, receipt = owned_receipts(github, binding, eid)
     detail = runtime.preloop('/flows/executions/' + eid, os.environ['PRELOOP_CI_TOKEN'])
-    for key in ['flow_id', 'project_id', 'repository_identifier', 'pr_number', 'head_sha', 'base_sha']:
-        require(detail.get(key) == completion.get(key), 'Error status target is not owned')
-    require(detail['id'] == eid, 'Wrong error-status execution')
+    bind_owned_execution(completion, intent, receipt, detail)
+    no_supersession(binding, os.environ['PRELOOP_CI_TOKEN'], completion)
     runtime.current_pr(github, binding, completion['pr_number'], completion['head_sha'], completion['base_sha'])
     run_url = 'https://github.com/' + binding['repository'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID']
     runtime.commit_status(github, binding, completion['head_sha'], 'error', run_url,
                           'Review validation or publication failed; no accepted review gate.')
 
 
+def run_publication():
+    """Preserve failure without masking it if the error-status gate also refuses."""
+    try:
+        return publish()
+    except Exception as failure:
+        posted = False
+        try:
+            publish_error_status()
+            posted = True
+        except Exception:
+            # Unknown ownership, stale target or unavailable API must not write.
+            print('Error status was not confirmed; reconcile the saved run.', file=sys.stderr)
+        runtime.write_receipt(Path(os.environ['RUNNER_TEMP']) / 'preloop-failure', {
+            'state': 'error', 'execution_id': os.environ['PRELOOP_EXECUTION_ID'],
+            'publication_run_id': os.environ['GITHUB_RUN_ID'],
+            'failure_type': type(failure).__name__, 'error_status_confirmed': posted,
+            'recovery': 'Reconcile this run, correct the failed phase, then recover the owned result; never rerun inference for publication.'})
+        raise
+
+
 if __name__ == '__main__':
     if sys.argv[1] == 'authenticate':
         authenticate()
     else:
-        try:
-            raise SystemExit(publish())
-        except Exception:
-            publish_error_status()
-            raise
+        raise SystemExit(run_publication())

@@ -21,14 +21,8 @@ CORRELATION_FIELDS = (
 )
 
 
-def bind_completed_review(completion, intent, receipt, execution, artifact, diff_sha256):
-    """All arguments must come from independently verified trusted sources.
-
-    diff_sha256 is recomputed over the full canonical merge-base-to-head diff
-    with trusted bare Git, not read from the result or supplied by the PR.
-    An incomplete/missing result refuses review publication; orchestration may
-    post an authorised service-error status without manufacturing a review.
-    """
+def bind_owned_execution(completion, intent, receipt, execution):
+    """Join authenticated completion to durable intent, even when no result exists."""
     for field in CORRELATION_FIELDS:
         value = intent.get(field)
         require(value is not None and receipt.get(field) == value and
@@ -43,6 +37,18 @@ def bind_completed_review(completion, intent, receipt, execution, artifact, diff
         require(type(value) is str and re.fullmatch("[0-9a-f]{" + str(length) + "}", value),
                 "Missing durable trigger " + field)
         require(receipt.get(field) == value, "Trigger receipt changed " + field)
+    return eid
+
+
+def bind_completed_review(completion, intent, receipt, execution, artifact, diff_sha256):
+    """All arguments must come from independently verified trusted sources.
+
+    diff_sha256 is recomputed over the full canonical merge-base-to-head diff
+    with trusted bare Git, not read from the result or supplied by the PR.
+    An incomplete/missing result refuses review publication; orchestration may
+    post an authorised service-error status without manufacturing a review.
+    """
+    eid = bind_owned_execution(completion, intent, receipt, execution)
     require(diff_sha256 == intent["diff_sha256"], "Complete canonical diff changed")
     startup = execution.get("startup_receipt")
     require(type(startup) is dict and startup.get("version") == 1 and

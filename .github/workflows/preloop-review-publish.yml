@@ -90,3 +90,11 @@ jobs:
           path: ${{ runner.temp }}/preloop-publication/receipt.json
           if-no-files-found: error
           retention-days: 31
+      - name: Preserve publication failure for recovery
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node24
+        with:
+          name: preloop-failure-${{ needs.authenticate.outputs.execution_id }}
+          path: ${{ runner.temp }}/preloop-failure/receipt.json
+          if-no-files-found: warn
+          retention-days: 31
