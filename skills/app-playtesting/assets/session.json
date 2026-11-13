@@ -1,0 +1,14 @@
+{
+  "schema": "app-playtest-session/v1",
+  "record_kind": "template",
+  "app": {"name": "Fill in app name", "build": "Fill in exact build", "platform": "Fill in platform and adapter"},
+  "question": "What should this one experiment establish?",
+  "starting_state": "Describe the observed starting screen and preconditions",
+  "reset_method": "Describe an authorised reset, or explain why reset is unavailable",
+  "status": "not_run",
+  "steps": [
+    {"action": "One reversible input", "expected": "A visible, testable result", "actual": "", "outcome": "not_run", "evidence": []}
+  ],
+  "evidence": [],
+  "limitations": ["Unexecuted template, not evidence that any app passed"]
+}
