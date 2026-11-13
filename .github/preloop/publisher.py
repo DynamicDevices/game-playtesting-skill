@@ -122,7 +122,10 @@ def publish():
         runtime.write_receipt(Path(os.environ['RUNNER_TEMP']) / 'preloop-publication', {
             'execution_id': eid, 'head_sha': head, 'base_sha': base, 'claim_sha256': proof['claim_sha256'],
             'review_id': review['id'], 'review_url': readback['html_url'], 'check_id': check['id'],
-            'status_id': status['id'], 'state': proof['state'], 'actions_run_url': run_url})
+            'status_id': status['id'], 'state': proof['state'], 'actions_run_url': run_url,
+            'result_sha256': completion['result_sha256'],
+            'native_completion_status': proof['native_completion_status'],
+            'controller_metadata': proof['controller_metadata']})
         return 0 if proof['state'] == 'success' else 1
     except Exception:
         github(root + '/check-runs/' + str(check['id']), 'PATCH', {

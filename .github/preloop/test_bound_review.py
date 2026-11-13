@@ -14,7 +14,7 @@ class BoundReviewTests(unittest.TestCase):
                            diff_sha256="c" * 64, challenge="d" * 48)
         self.eid = "487d988a-53ad-4f5d-8b84-d77bb733676f"
         self.receipt = dict(self.intent, execution_id=self.eid)
-        self.result = dict(success=True, verdict="pass", review="Complete review",
+        self.result = dict(status="success", success=True, verdict="pass", review="Complete review",
                            head_sha="a" * 40, base_sha="b" * 40, findings=[])
         self.execution = dict(self.intent, id=self.eid, status="SUCCEEDED", startup_receipt={
             "version": 1, "executor": "hosted", "checkout_verified": True,
@@ -23,7 +23,9 @@ class BoundReviewTests(unittest.TestCase):
         self.completion = dict(self.intent, execution_id=self.eid, status="SUCCEEDED",
                                event_id="73db8ab4-33db-4359-a135-9f20edc61ff8",
                                result_ready=True, result_sha256=canonical_digest(self.result))
-        self.artifact = dict(execution_id=self.eid, status="SUCCEEDED", result=self.result)
+        self.artifact = dict(execution_id=self.eid, status="SUCCEEDED", result=self.result,
+                             result_withheld_paths=[],
+                             schema_validation=dict(valid=True, error_count=0, errors=[]))
 
     def check(self, diff=None):
         return bind_completed_review(self.completion, self.intent, self.receipt,
@@ -91,6 +93,28 @@ class BoundReviewTests(unittest.TestCase):
         self.receipt["execution_id"] = self.eid
         self.artifact["result"] = copy.deepcopy(self.result)
         self.artifact["result"]["review"] = "Changed"
+        with self.assertRaises(InvalidReview):
+            self.check()
+
+    def test_documented_telemetry_is_preserved_without_mutating_signed_result(self):
+        self.result['container_termination'] = {'reason': 'completed', 'exit_code': 0}
+        self.completion['result_sha256'] = canonical_digest(self.result)
+        original = copy.deepcopy(self.result)
+        proof = self.check()
+        self.assertEqual(proof['controller_metadata'],
+                         {'container_termination': self.result['container_termination']})
+        self.assertEqual(proof['native_completion_status'], 'success')
+        self.assertNotIn('container_termination', proof['result'])
+        self.assertNotIn('status', proof['result'])
+        self.assertEqual(self.result, original)
+
+    def test_native_marker_is_not_an_execution_success_override(self):
+        self.execution['status'] = self.artifact['status'] = self.completion['status'] = 'FAILED'
+        self.assertEqual(self.check()['state'], 'error')
+
+    def test_unknown_native_fields_are_not_silently_dropped(self):
+        self.result['controller_debug'] = {'safe': True}
+        self.completion['result_sha256'] = canonical_digest(self.result)
         with self.assertRaises(InvalidReview):
             self.check()
 

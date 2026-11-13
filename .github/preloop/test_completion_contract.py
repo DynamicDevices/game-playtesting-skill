@@ -38,9 +38,14 @@ class CompletionTests(unittest.TestCase):
     def check(self, event=None):
         return verify_dispatch(event or self.event(), self.secret, self.binding, self.now, 300)
 
+    def artifact(self):
+        return dict(execution_id=self.data['execution_id'], status=self.data['status'],
+                    result=self.result, result_withheld_paths=[],
+                    schema_validation=dict(valid=True, error_count=0, errors=[]))
+
     def test_valid_wake_and_exact_projection(self):
         completion = self.check()
-        artifact = dict(execution_id=self.data["execution_id"], status="SUCCEEDED", result=self.result)
+        artifact = self.artifact()
         self.assertEqual(verify_result_projection(completion, artifact), self.result)
 
     def test_tampered_bytes_fail(self):
@@ -98,12 +103,12 @@ class CompletionTests(unittest.TestCase):
     def test_failed_completion_with_result_is_preserved(self):
         self.data["status"] = "FAILED"
         completion = self.check()
-        artifact = dict(execution_id=self.data["execution_id"], status="FAILED", result=self.result)
+        artifact = self.artifact()
         self.assertEqual(verify_result_projection(completion, artifact), self.result)
 
     def test_changed_result_status_or_execution_rejected(self):
         completion = self.check()
-        artifact = dict(execution_id=self.data["execution_id"], status="SUCCEEDED", result=self.result)
+        artifact = self.artifact()
         for field, value in (("execution_id", "other"), ("status", "FAILED"), ("result", {})):
             bad = copy.deepcopy(artifact)
             bad[field] = value
@@ -114,6 +119,48 @@ class CompletionTests(unittest.TestCase):
         event = self.event()
         event["client_payload"].update(attempt=900, delivery_id="different")
         self.assertEqual(self.check(event)["execution_id"], self.data["execution_id"])
+
+    def test_schema_validation_must_be_present_true_and_consistent(self):
+        for validation in (None, {}, dict(valid=1, error_count=0, errors=[]),
+                           dict(valid=False, error_count=0, errors=[]),
+                           dict(valid=True, error_count=1, errors=[]),
+                           dict(valid=True, error_count=False, errors=[]),
+                           dict(valid=True, error_count=0, errors=['a real error']),
+                           dict(valid=True, error_count=0, errors=None)):
+            artifact = self.artifact()
+            artifact['schema_validation'] = validation
+            with self.subTest(validation=validation), self.assertRaises(InvalidReview):
+                verify_result_projection(self.check(), artifact)
+
+    def test_withheld_or_unknown_completeness_is_rejected(self):
+        for withheld in (None, {}, '', ['/findings/0/evidence']):
+            artifact = self.artifact()
+            artifact['result_withheld_paths'] = withheld
+            with self.subTest(withheld=withheld), self.assertRaises(InvalidReview):
+                verify_result_projection(self.check(), artifact)
+        artifact = self.artifact()
+        del artifact['result_withheld_paths']
+        with self.assertRaises(InvalidReview):
+            verify_result_projection(self.check(), artifact)
+
+    def test_error_response_is_not_a_review_even_with_matching_digest(self):
+        for result in (None, [], 'review completed', {'error': 'no result'}):
+            self.result = result
+            self.data['result_sha256'] = canonical_digest(result)
+            artifact = self.artifact()
+            artifact['error'] = {'code': 'missing_result'}
+            with self.subTest(result=result), self.assertRaises(InvalidReview):
+                verify_result_projection(self.check(), artifact)
+
+    def test_digest_includes_telemetry_before_any_normalization(self):
+        self.result['container_termination'] = {'reason': 'completed'}
+        # A digest of the stripped result must not authenticate the raw response.
+        with self.assertRaises(InvalidReview):
+            verify_result_projection(self.check(), self.artifact())
+        self.data['result_sha256'] = canonical_digest(self.result)
+        raw = verify_result_projection(self.check(), self.artifact())
+        self.assertIs(raw, self.result)
+        self.assertIn('container_termination', raw)
 
 
 if __name__ == "__main__":

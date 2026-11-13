@@ -32,7 +32,8 @@ def validate_result(result, expected):
 
     A model's success flag never overrides blocking findings or service errors.
     expected contains independently established head/base/diff/challenge values.
-    This intentionally refuses the deployed schema, which lacks two bindings.
+    Trusted orchestration adds these bindings only after checking the native
+    result's digest, complete projection, schema and completion marker.
     """
     require(type(result) is dict and set(result) == RESULT_FIELDS,
             "Unexpected or missing review fields")

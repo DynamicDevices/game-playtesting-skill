@@ -13,9 +13,9 @@ Assisted-by: Briar.
 import re
 
 from completion_contract import canonical_digest, verify_result_projection
+from native_result import reviewer_projection
 from review_contract import publication_state, require
 
-JUDGEMENT_FIELDS = {"success", "verdict", "review", "head_sha", "base_sha", "findings"}
 CORRELATION_FIELDS = (
     "flow_id", "project_id", "repository_identifier", "pr_number", "head_sha", "base_sha",
 )
@@ -53,9 +53,8 @@ def bind_completed_review(completion, intent, receipt, execution, artifact, diff
             startup.get("commit") == intent["head_sha"] and
             type(startup.get("agent_started_at")) is str and startup["agent_started_at"],
             "Missing controller-observed native checkout/startup")
-    result = verify_result_projection(completion, artifact)
-    require(type(result) is dict and set(result) == JUDGEMENT_FIELDS,
-            "Unexpected native review result fields")
+    raw_result = verify_result_projection(completion, artifact)
+    result, controller_metadata = reviewer_projection(raw_result)
     expected = {key: intent[key] for key in ("head_sha", "base_sha", "diff_sha256", "challenge")}
     # Add ONLY externally verified bookkeeping, never a model-provided value.
     bound = {**result, "diff_sha256": expected["diff_sha256"], "challenge": expected["challenge"]}
@@ -63,4 +62,6 @@ def bind_completed_review(completion, intent, receipt, execution, artifact, diff
     claim = {**expected, "execution_id": eid, "event_id": completion["event_id"],
              "result_sha256": completion["result_sha256"]}
     return {"state": state, "result": validated, "claim_sha256": canonical_digest(claim),
-            "execution_id": eid, "event_id": completion["event_id"]}
+            "execution_id": eid, "event_id": completion["event_id"],
+            "native_completion_status": raw_result["status"],
+            "controller_metadata": controller_metadata}

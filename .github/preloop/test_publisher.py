@@ -24,8 +24,10 @@ class PublisherTests(unittest.TestCase):
                            trigger_run_id='10', model_id='model', flow_config_sha256='f' * 64)
         self.eid = '487d988a-53ad-4f5d-8b84-d77bb733676f'
         self.receipt = dict(self.intent, execution_id=self.eid)
-        self.result = dict(success=True, verdict='pass', review='Complete review, no actionable defects.',
+        self.result = dict(status='success', success=True, verdict='pass', review='Complete review, no actionable defects.',
                            head_sha='a' * 40, base_sha='b' * 40, findings=[])
+        self.result_envelope = dict(result_withheld_paths=[],
+                                    schema_validation=dict(valid=True, error_count=0, errors=[]))
         self.detail = dict(self.intent, id=self.eid, status='SUCCEEDED', start_time='2026-11-13T15:00:00Z',
                            startup_receipt=dict(version=1, executor='hosted', checkout_verified=True,
                                                 setup_completed=True, commit='a' * 40,
@@ -80,7 +82,8 @@ class PublisherTests(unittest.TestCase):
     def preloop(self, path, _token, method='GET', body=None):
         self.assertEqual(method, 'GET', 'Publisher must never trigger another review')
         if path.endswith('/result'):
-            return dict(execution_id=self.eid, status=self.detail['status'], result=self.result)
+            return dict(execution_id=self.eid, status=self.detail['status'], result=self.result,
+                        **self.result_envelope)
         return self.detail
 
     def pages(self, _github, path, field=None):
@@ -109,6 +112,38 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(self.checks[0]['conclusion'], 'success')
         self.assertIn(self.eid, self.reviews[0]['body'])
         self.assertTrue((Path(self.temp.name) / 'preloop-publication/receipt.json').exists())
+
+    def test_documented_metadata_is_kept_in_receipt_not_posted_as_findings(self):
+        self.result['container_termination'] = {'reason': 'completed', 'exit_code': 0}
+        self.assertEqual(self.run_publisher(), 0)
+        import json
+        receipt = json.loads((Path(self.temp.name) / 'preloop-publication/receipt.json').read_text())
+        self.assertEqual(receipt['controller_metadata'],
+                         {'container_termination': self.result['container_termination']})
+        self.assertEqual(receipt['result_sha256'], canonical_digest(self.result))
+        self.assertEqual(receipt['native_completion_status'], 'success')
+        self.assertNotIn('container_termination', self.reviews[0]['body'])
+
+    def test_bad_schema_or_withheld_findings_cannot_write_anything(self):
+        for envelope in (dict(result_withheld_paths=[], schema_validation=None),
+                         dict(result_withheld_paths=['/findings/0/evidence'],
+                              schema_validation=dict(valid=True, error_count=0, errors=[])),
+                         dict(result_withheld_paths=[],
+                              schema_validation=dict(valid=False, error_count=1, errors=['invalid'])),
+                         dict(self.result_envelope, error={'code': 'missing_result'})):
+            self.result_envelope = envelope
+            with self.subTest(envelope=envelope), self.assertRaises(InvalidReview):
+                self.run_publisher()
+            self.assertEqual(self.calls, [])
+
+    def test_missing_marker_or_error_result_cannot_write_anything(self):
+        results = [dict(self.result, status='FAILED'), {'error': 'review missing'},
+                   {key: value for key, value in self.result.items() if key != 'status'}]
+        for result in results:
+            self.result = result
+            with self.subTest(result=result), self.assertRaises(InvalidReview):
+                self.run_publisher()
+            self.assertEqual(self.calls, [])
 
     def test_blocking_result_remains_readable_and_fails(self):
         self.result.update(success=False, verdict='changes_requested', findings=[dict(

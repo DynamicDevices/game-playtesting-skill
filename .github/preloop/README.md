@@ -15,7 +15,8 @@ the repository-bound Preloop CI controller to start a review. A second durable
 receipt binds the actual execution ID. There is one startup observation; queued
 or accepted is not proof that native clone, checkout, setup and the agent started.
 
-Preloop owns source cloning and the six-field native judgement. The model does
+Preloop owns source cloning and the six judgement fields plus the required
+native completion marker `status: "success"`. The model does
 not generate transport code, challenges, source digests or publication metadata.
 The worker receives no GitHub publisher or completion-dispatch token.
 
@@ -28,6 +29,36 @@ It publishes all findings as a readable COMMENT review, a genuine check and
 the stable `Preloop review` commit status, then independently reads them back.
 Blocking findings are failure; service/integrity failure is error, never success.
 The actual publisher Actions run must also succeed for delivery acceptance.
+
+## Native result compatibility
+
+`native_result.py` owns the proposed native schema and its normalization boundary.
+Print the schema for operator review with:
+
+```sh
+python3 -B .github/preloop/native_result.py
+```
+
+The seven required fields include `status: "success"` as the provider's documented
+`no_confirmation` workaround. This marks output completion, not a passing review:
+`success: false`, blocking findings or a FAILED execution cannot become green
+because this marker is present. The model prompt must request this exact schema
+without asking the model to run scripts or validate its own output.
+
+The publisher first verifies the signed digest of the untouched public result
+projection, including any `container_termination` object. It requires empty
+`result_withheld_paths` and explicit successful `schema_validation` with no errors.
+Only then does it separate the documented controller object and completion marker
+from the strict reviewer judgement. Unknown fields, malformed telemetry, missing
+schema proof and error responses fail closed. Telemetry and the original digest
+are preserved in the publication receipt, not posted as review findings.
+
+Before live use, coordinate the flow's result_schema/prompt and new signed config
+hash with this contract, and include native_result.py in the complete signed
+source manifest. No live flow/schema/model or policy was changed by this source
+update. Provider evidence is the 13 November 2026 reply and migration guide;
+public result API documentation/source confirm the restricted response envelope,
+but neither substitutes for the real hosted pilot on our binding.
 
 Only the trusted GitHub publisher holds PR-review/check/status write permissions.
 The completion PAT is single-repository Contents:write for dispatch and stays

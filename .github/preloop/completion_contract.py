@@ -103,10 +103,22 @@ def verify_dispatch(event, secret, binding, now, tolerance_seconds):
 
 def verify_result_projection(completion, artifact):
     """Digest is of artifact.result, not the HTTP response wrapper or raw JSON."""
-    require(type(artifact) is dict and completion["result_ready"] and
+    require(type(artifact) is dict and completion.get("result_ready") is True and
             artifact.get("execution_id") == completion["execution_id"] and
             artifact.get("status") == completion["status"], "Artifact identity mismatch")
     require("result" in artifact and
             canonical_digest(artifact["result"]) == completion["result_sha256"],
             "Artifact differs from signed completion")
+    # Check the untouched public projection above, including any documented
+    # controller telemetry, before separating it from the reviewer judgement.
+    require(artifact.get("error") is None and type(artifact["result"]) is dict,
+            "Result response is an error, not a review")
+    withheld = artifact.get("result_withheld_paths")
+    require(type(withheld) is list and not withheld,
+            "Result completeness was not proved or members were withheld")
+    validation = artifact.get("schema_validation")
+    require(type(validation) is dict and validation.get("valid") is True and
+            type(validation.get("error_count")) is int and validation["error_count"] == 0 and
+            type(validation.get("errors")) is list and not validation["errors"],
+            "Missing, failed or inconsistent service schema validation")
     return artifact["result"]
