@@ -1,0 +1,92 @@
+name: Publish Preloop review
+
+on:
+  repository_dispatch:
+    types: [preloop-review-completed]
+  workflow_dispatch:
+    inputs:
+      execution_id:
+        description: Owned completed execution; does not launch another review
+        required: true
+        type: string
+      authenticated_run_id:
+        description: Original run with a successful completion-authentication job
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  authenticate:
+    name: Authenticate completion
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    outputs:
+      execution_id: ${{ steps.authenticate.outputs.execution_id }}
+      pr_number: ${{ steps.authenticate.outputs.pr_number }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node24
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Load exact signed service authority
+        env:
+          PRELOOP_PUBLICATION_AUTHORITY: ${{ secrets.PRELOOP_PUBLICATION_AUTHORITY }}
+          PRELOOP_PUBLICATION_SIGNATURE: ${{ secrets.PRELOOP_PUBLICATION_SIGNATURE }}
+        run: python3 .github/preloop/install_policy.py
+      - name: Authenticate the completion or owned recovery
+        id: authenticate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRELOOP_CALLBACK_SECRET: ${{ secrets.PRELOOP_CALLBACK_SECRET }}
+        run: python3 .github/preloop/publisher.py authenticate
+      - name: Preserve authenticated completion
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node24
+        with:
+          name: preloop-wake-${{ steps.authenticate.outputs.execution_id }}
+          path: ${{ runner.temp }}/preloop-wake/receipt.json
+          if-no-files-found: error
+          retention-days: 31
+  publish:
+    name: Preloop review
+    needs: authenticate
+    concurrency:
+      group: preloop-publish-${{ github.repository }}-${{ needs.authenticate.outputs.pr_number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+      checks: write
+      statuses: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node24
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Load exact signed service authority
+        env:
+          PRELOOP_PUBLICATION_AUTHORITY: ${{ secrets.PRELOOP_PUBLICATION_AUTHORITY }}
+          PRELOOP_PUBLICATION_SIGNATURE: ${{ secrets.PRELOOP_PUBLICATION_SIGNATURE }}
+        run: python3 .github/preloop/install_policy.py
+      - name: Validate, publish and independently read back
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRELOOP_CI_TOKEN: ${{ secrets.PRELOOP_CI_TOKEN }}
+          PRELOOP_EXECUTION_ID: ${{ needs.authenticate.outputs.execution_id }}
+        run: python3 .github/preloop/publisher.py publish
+      - name: Preserve actual publication receipt
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node24
+        with:
+          name: preloop-publication-${{ needs.authenticate.outputs.execution_id }}
+          path: ${{ runner.temp }}/preloop-publication/receipt.json
+          if-no-files-found: error
+          retention-days: 31
