@@ -24,7 +24,7 @@ RESULT_FIELDS = {
 }
 FINDING_FIELDS = {"severity", "location", "problem", "evidence", "fix"}
 SEVERITIES = {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
-TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"}
+TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "STOPPED", "TIMEOUT"}
 
 
 def validate_result(result, expected):

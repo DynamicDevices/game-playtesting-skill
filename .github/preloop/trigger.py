@@ -7,7 +7,7 @@ import sys
 import urllib.parse
 
 import runtime
-from review_contract import require
+from review_contract import TERMINAL, require
 
 
 def prepare():
@@ -54,7 +54,7 @@ def start():
                     row.get('base_sha') == base for row in rows), 'Review appeared after preparation')
     # Cancel only superseded owned executions for this PR, never other PRs.
     for row in rows:
-        if row['pr_number'] == number and row['status'] not in ['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT']:
+        if row['pr_number'] == number and row['status'] not in TERMINAL:
             runtime.verify_live_service(binding, workload, 'preloop-review-trigger.yml')
             runtime.preloop('/flows/executions/' + row['id'] + '/command', token,
                             'POST', {'command': 'stop', 'payload': None})

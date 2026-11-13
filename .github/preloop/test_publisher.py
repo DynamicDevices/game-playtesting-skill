@@ -226,6 +226,15 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(self.statuses[0]['state'], 'error')
         self.assertIn('🟡 Low', self.reviews[0]['body'])
 
+    def test_native_stopped_and_timeout_results_are_errors_never_green(self):
+        for state in ['STOPPED', 'TIMEOUT']:
+            with self.subTest(state=state):
+                self.detail['status'] = self.completion['status'] = state
+                self.assertEqual(self.run_publisher(), 1)
+                self.assertEqual(self.statuses[0]['state'], 'error')
+                self.assertEqual(self.checks[0]['conclusion'], 'failure')
+                (Path(self.temp.name) / 'preloop-publication/receipt.json').unlink()
+
     def test_stale_pr_cannot_publish(self):
         with self.assertRaises(InvalidReview):
             self.run_publisher(stale=True)

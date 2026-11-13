@@ -113,6 +113,14 @@ class TriggerTests(unittest.TestCase):
             trigger.start()
         self.assertEqual(self.calls, [])
 
+    def test_native_terminal_executions_are_not_stopped_again(self):
+        self.store_intent()
+        self.rows = [dict(self.detail, id='old-stopped', head_sha='f' * 40, status='STOPPED'),
+                     dict(self.detail, id='old-timeout', head_sha='e' * 40, status='TIMEOUT')]
+        trigger.start()
+        self.assertEqual(len(self.calls), 1)
+        self.assertTrue(self.calls[0][0].endswith('/trigger'))
+
     def test_start_refuses_controller_substitution(self):
         self.store_intent()
         self.detail['base_sha'] = '9' * 40
