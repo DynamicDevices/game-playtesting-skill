@@ -42,6 +42,7 @@ class PublisherTests(unittest.TestCase):
         self.history = [self.detail]
         self.fail_review = False
         self.readback_actor = 'github-actions[bot]'
+        self.check_actor = 'github-actions'
         self.event = Path(self.temp.name) / 'event.json'
         self.event.write_text('{}')
         env = patch.dict(os.environ, GITHUB_REPOSITORY='example/repository', GH_TOKEN='fixture',
@@ -53,7 +54,7 @@ class PublisherTests(unittest.TestCase):
     def github(self, path, method='GET', body=None):
         self.calls.append((path, method, body))
         if path.endswith('/check-runs') and method == 'POST':
-            value = dict(body, id=11 + len(self.checks), app={'slug': 'github-actions'})
+            value = dict(body, id=11 + len(self.checks), app={'slug': self.check_actor})
             self.checks.append(value)
             return value
         if '/check-runs/' in path:
@@ -237,6 +238,13 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(self.statuses, [])
         self.assertEqual(self.checks[0]['conclusion'], 'failure')
 
+    def test_check_readback_must_pass_before_success_status(self):
+        self.check_actor = 'other'
+        with self.assertRaises(InvalidReview):
+            self.run_publisher()
+        self.assertEqual(self.statuses, [])
+        self.assertEqual(self.checks[0]['conclusion'], 'failure')
+
     def test_ambiguous_send_is_not_repeated(self):
         self.fail_review = True
         with self.assertRaises(InvalidReview):
@@ -253,6 +261,21 @@ class PublisherTests(unittest.TestCase):
         (Path(self.temp.name) / 'preloop-publication/receipt.json').unlink()
         self.assertEqual(self.run_publisher(), 0)
         self.assertEqual(len(self.reviews), 1)
+        self.assertEqual(len(self.checks), 1)
+
+    def test_duplicate_or_substituted_check_intent_blocks_recovery(self):
+        self.run_publisher()
+        prior = copy.deepcopy(self.checks[0])
+        self.checks.append(copy.deepcopy(prior))
+        writes = len(self.calls)
+        with self.assertRaisesRegex(InvalidReview, 'Duplicate check'):
+            self.run_publisher()
+        self.assertEqual(len(self.calls), writes)
+        self.checks.pop()
+        self.checks[0]['app'] = {'slug': 'other'}
+        with self.assertRaisesRegex(InvalidReview, 'Wrong existing check'):
+            self.run_publisher()
+        self.assertEqual(len(self.calls), writes)
 
     def test_result_substitution_refused_before_writes(self):
         self.receipt['execution_id'] = 'different'

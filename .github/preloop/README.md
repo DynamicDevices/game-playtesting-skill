@@ -90,6 +90,10 @@ status write. `preloop-failure-EXECUTION` records the failed publication run, er
 class and whether an error status was confirmed, without raw exceptions, tokens
 or service logs. Error-reporting failure must not hide the original failure.
 Complete validated findings from FAILED executions remain visible but never green.
+Recovery reuses the exact owned check rather than creating duplicate checks.
+Multiple or substituted check intents require reconciliation. A success status
+is sent only after both the complete review and the genuine Actions check have
+been independently read back, including the current publication-run link.
 
 ## Signed policy and remaining acceptance work
 
@@ -104,18 +108,42 @@ Native execution detail does not independently attest the runtime model ID.
 Acceptance therefore requires Alex's explicit fixed-flow configuration contract;
 do not describe that exception as per-execution model attestation.
 
-The current code checks signature, expiry and source bytes before each write.
-It does not yet provide an independently live service-revocation check for each
-GitHub write. Desktop `allowed_signers` is not automatically propagated to
-Actions. Freeze and independently review the exact revocation mechanism before
-signing or activating the policy; do not mistake local tests for that proof.
+Before each GitHub write or native trigger/stop, the candidate rechecks the
+signature, expiry and source bytes, then fetches the current states of both
+repository review workflows and the exact running Actions attempt. The signed
+repository binding must explicitly approve `live_revocation` with
+`mechanism: github-actions-workflow-and-run-v1`, `explicit_posture_approval: true`
+and `workflow_ids` mapping both `preloop-review-trigger.yml` and
+`preloop-review-publish.yml` to their actual immutable numeric GitHub IDs.
+Missing approval, API failure, disabled/substituted workflows, cancelled or
+completed runs, changed revisions and old attempts deny the operation.
+
+This is a proposed service-suspension mechanism, not accepted live proof or
+automatic desktop signing-key revocation propagation. To revoke service operation,
+disable either bound workflow, cancel every affected running attempt and reconcile
+any operation already in flight. Cancel before re-enabling workflows so an old
+attempt cannot resume. Re-enabling is not renewal of an expired signed policy.
+The state read and subsequent write are not atomic; GitHub may accept a write
+already in flight at cancellation. Preserve its receipts and reconcile effects.
+The exact mechanism, identities and residual race require independent review,
+Alex's final policy signature and a real cancellation/suspension pilot before
+activation; fixtures do not prove GitHub runtime enforcement. A signing-key
+revocation separately requires service suspension and policy/credential handling.
+
+Startup makes one execution-detail read and saves the allowlisted controller
+observation as `preloop-startup-EXECUTION` before interpreting startup proof.
+Queued/failed executions do not count as running. No sleep loop, polling or
+automatic re-trigger compensates for startup timing. A live queued observation
+remains a failed startup gate requiring phase diagnosis, not successful delivery.
 
 Bootstrap also needs resolution: GitHub dispatch workflows must already be on
 the default branch, but independent Preloop review is required before installation.
-The current grant permits reviewed bootstrap installation, not installing this
-unreviewed publisher to review itself. An already authorised authenticated
-completion route, or an exact signed amendment for a minimal inert receiver,
-is needed before launching that review. No synthetic trigger commit, extra flow,
+The selected project grant permits bootstrap installation only after Alex's
+actual exact-candidate correctness review plus independent security review by
+the identified existing DD Sandchest service. Sandchest excludes correctness;
+neither volunteering to review nor signing a grant is a review verdict.
+Both reviews, required CI, accepted revocation and final signed publisher policies
+must precede installation. No unreviewed self-installation, synthetic trigger commit, extra flow,
 manual green status or review waiver is an acceptable workaround.
 
 ## Offline regression tests

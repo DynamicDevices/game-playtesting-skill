@@ -21,6 +21,7 @@ class RuntimeBoundaryTests(unittest.TestCase):
         with patch.object(runtime.trust, 'load_authority', return_value=self.binding), \
              patch.object(runtime.trust, 'verify_workload', return_value={'workflow_sha': 'a' * 40}), \
              patch.object(runtime.trust, 'verify_sources'), \
+             patch.object(runtime, 'verify_live_service') as live, \
              patch.object(runtime.trust, 'request') as request:
             _, _, github = runtime.context('preloop-review-publish.yml')
             for path, method in [('contents/file.py', 'PUT'), ('pulls/7', 'PATCH'),
@@ -31,7 +32,9 @@ class RuntimeBoundaryTests(unittest.TestCase):
             with self.assertRaises(InvalidReview):
                 github('/repos/other/repository/statuses/' + 'a' * 40, 'POST', {})
             request.assert_not_called()
+            live.assert_not_called()
             github('/repos/example/repository/pulls/7/reviews', 'POST', {})
+            live.assert_called_once()
             self.assertEqual(request.call_count, 1)
 
     def test_trigger_cannot_use_publisher_privileges(self):
@@ -41,6 +44,17 @@ class RuntimeBoundaryTests(unittest.TestCase):
              patch.object(runtime.trust, 'request') as request:
             _, _, github = runtime.context('preloop-review-trigger.yml')
             with self.assertRaises(InvalidReview):
+                github('/repos/example/repository/pulls/7/reviews', 'POST', {})
+            request.assert_not_called()
+
+    def test_failed_live_gate_cannot_transmit_an_allowed_write(self):
+        with patch.object(runtime.trust, 'load_authority', return_value=self.binding), \
+             patch.object(runtime.trust, 'verify_workload', return_value={'workflow_sha': 'a' * 40}), \
+             patch.object(runtime.trust, 'verify_sources'), \
+             patch.object(runtime, 'verify_live_service', side_effect=InvalidReview('suspended')), \
+             patch.object(runtime.trust, 'request') as request:
+            _, _, github = runtime.context('preloop-review-publish.yml')
+            with self.assertRaisesRegex(InvalidReview, 'suspended'):
                 github('/repos/example/repository/pulls/7/reviews', 'POST', {})
             request.assert_not_called()
 

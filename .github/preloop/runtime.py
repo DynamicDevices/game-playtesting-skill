@@ -14,6 +14,51 @@ from review_contract import require
 from completion_contract import strict_json
 
 
+def verify_live_service(binding, workload, workflow):
+    """Fail-closed online suspension gate; no cached allow or signing-key claims.
+
+    Alex must approve this exact mechanism in the repository's signed binding.
+    Disabling either workflow suspends writes; cancel the affected runs as well
+    for durable revocation before any later workflow re-enable. This API check
+    cannot make a GitHub read and subsequent write atomic.
+    """
+    fresh = trust.load_authority('.github', binding['repository'])
+    require(fresh == binding, 'Publication authority changed during the run')
+    policy = binding.get('live_revocation')
+    require(type(policy) is dict and
+            policy.get('mechanism') == 'github-actions-workflow-and-run-v1' and
+            policy.get('explicit_posture_approval') is True,
+            'Missing accepted live service-revocation mechanism')
+    names = {'preloop-review-trigger.yml', 'preloop-review-publish.yml'}
+    identities = policy.get('workflow_ids')
+    require(type(identities) is dict and set(identities) == names and workflow in names and
+            all(type(value) is int and value > 0 for value in identities.values()),
+            'Missing immutable workflow identities')
+    root = '/repos/' + binding['repository']
+    for name in sorted(names):
+        observed = trust.request('https://api.github.com',
+                                 root + '/actions/workflows/' + str(identities[name]),
+                                 os.environ['GH_TOKEN'])
+        require(observed.get('id') == identities[name] and
+                observed.get('path') == '.github/workflows/' + name and
+                observed.get('state') == 'active', 'Review workflow suspended or substituted')
+    run_id = os.environ['GITHUB_RUN_ID']
+    require(run_id.isdigit(), 'Malformed live workload run')
+    run = trust.request('https://api.github.com', root + '/actions/runs/' + run_id,
+                        os.environ['GH_TOKEN'])
+    require(str(run.get('id')) == run_id and
+            run.get('repository', {}).get('id') == binding['repository_id'] and
+            run.get('workflow_id') == identities[workflow] and
+            run.get('head_sha') == workload.get('workflow_sha') and
+            (workload.get('event_name') == 'pull_request_target' or
+             run.get('head_branch') == binding['default_branch']) and
+            run.get('event') == workload.get('event_name') and
+            str(run.get('run_attempt')) == str(workload.get('run_attempt')) and
+            str(run.get('run_attempt', '')).isdigit() and
+            run.get('status') == 'in_progress' and run.get('conclusion') is None,
+            'Workload is cancelled, stopped, substituted or from another attempt')
+
+
 def context(workflow):
     repository = os.environ['GITHUB_REPOSITORY']
     binding = trust.load_authority('.github', repository)
@@ -24,9 +69,6 @@ def context(workflow):
     def github(path, method='GET', body=None):
         require(path.startswith('/repos/' + repository + '/'), 'GitHub target outside this repository')
         if method != 'GET':
-            # Recheck signature, expiry and source bytes at each write batch.
-            fresh = trust.load_authority('.github', repository)
-            require(fresh == binding, 'Publication authority changed during the run')
             relative = path.removeprefix('/repos/' + repository + '/')
             allowed = ((method == 'POST' and re.fullmatch('statuses/[0-9a-f]{40}', relative)) or
                        (workflow == 'preloop-review-publish.yml' and
@@ -34,6 +76,7 @@ def context(workflow):
                          (method == 'POST' and relative == 'check-runs') or
                          (method == 'PATCH' and re.fullmatch('check-runs/[1-9][0-9]*', relative)))))
             require(allowed, 'GitHub operation outside review/status publication')
+            verify_live_service(binding, workload, workflow)
         return trust.request('https://api.github.com', path, os.environ['GH_TOKEN'], method, body)
     trust.verify_sources(github, binding, workload['workflow_sha'], list(binding['approved_files']))
     return binding, workload, github

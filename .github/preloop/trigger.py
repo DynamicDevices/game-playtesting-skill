@@ -39,7 +39,7 @@ def prepare():
 
 
 def start():
-    binding, _workload, github = runtime.context('preloop-review-trigger.yml')
+    binding, workload, github = runtime.context('preloop-review-trigger.yml')
     intent = json.loads((Path(os.environ['RUNNER_TEMP']) / 'preloop-intent/receipt.json').read_text())
     number, head, base = intent['pr_number'], intent['head_sha'], intent['base_sha']
     require(intent['trigger_run_id'] == os.environ['GITHUB_RUN_ID'], 'Intent belongs to another run')
@@ -55,9 +55,11 @@ def start():
     # Cancel only superseded owned executions for this PR, never other PRs.
     for row in rows:
         if row['pr_number'] == number and row['status'] not in ['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT']:
+            runtime.verify_live_service(binding, workload, 'preloop-review-trigger.yml')
             runtime.preloop('/flows/executions/' + row['id'] + '/command', token,
                             'POST', {'command': 'stop', 'payload': None})
     runtime.current_pr(github, binding, number, head, base)
+    runtime.verify_live_service(binding, workload, 'preloop-review-trigger.yml')
     execution = runtime.preloop('/flows/' + binding['flow_id'] + '/trigger', token,
                                 'POST', {'pr_number': number, 'head_sha': head})
     require(all(execution.get(key) == intent[key] for key in
@@ -83,6 +85,15 @@ def startup():
                 ['flow_id', 'project_id', 'repository_identifier', 'pr_number', 'head_sha', 'base_sha']),
             'Startup belongs to another execution or revision')
     startup = detail.get('startup_receipt') or {}
+    runtime.write_receipt(Path(os.environ['RUNNER_TEMP']) / 'preloop-startup', {
+        'execution_id': receipt['execution_id'], 'status': detail.get('status'),
+        'head_sha': receipt['head_sha'], 'base_sha': receipt['base_sha'],
+        'startup_receipt': {key: startup.get(key) for key in
+            ['version', 'executor', 'lease_revoked', 'commit', 'checkout_verified',
+             'setup_completed', 'agent_started_at']} if type(startup) is dict else None})
+    require(detail.get('status') in ['RUNNING', 'SUCCEEDED'],
+            'Native workload is queued or failed, not a verified running launch')
+    require(type(startup) is dict, 'Malformed native startup receipt')
     require(startup.get('version') == 1 and startup.get('executor') == 'hosted' and
             startup.get('lease_revoked') is None and
             startup.get('commit') == receipt['head_sha'] and

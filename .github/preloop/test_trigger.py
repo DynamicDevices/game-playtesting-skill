@@ -24,7 +24,7 @@ class TriggerTests(unittest.TestCase):
                            trigger_run_id='10', workflow_sha='e' * 40, model_id='model',
                            flow_config_sha256='f' * 64, challenge='d' * 48,
                            diff_sha256='c' * 64)
-        self.detail = dict(self.intent, id='execution', startup_receipt=dict(
+        self.detail = dict(self.intent, id='execution', status='RUNNING', startup_receipt=dict(
             version=1, executor='hosted', commit='a' * 40, checkout_verified=True,
             setup_completed=True, agent_started_at='2026-11-13T15:00:01Z', lease_revoked=None))
         self.rows, self.calls = [], []
@@ -42,6 +42,7 @@ class TriggerTests(unittest.TestCase):
                    patch.object(runtime, 'executions', side_effect=lambda *_: self.rows),
                    patch.object(runtime, 'full_diff_sha256', return_value='c' * 64),
                    patch.object(runtime, 'output'),
+                   patch.object(runtime, 'verify_live_service'),
                    patch.object(runtime, 'commit_status'),
                    patch.object(runtime, 'preloop', side_effect=self.preloop)]
         self.mocks = []
@@ -119,10 +120,40 @@ class TriggerTests(unittest.TestCase):
             trigger.start()
         self.mocks[-2].assert_not_called()  # No pending status for an unbound execution.
 
+    def test_live_revocation_prevents_native_trigger(self):
+        self.store_intent()
+        with patch.object(runtime, 'verify_live_service', side_effect=InvalidReview('suspended')):
+            with self.assertRaisesRegex(InvalidReview, 'suspended'):
+                trigger.start()
+        self.assertEqual(self.calls, [])
+
+    def test_live_revocation_rechecked_between_stop_and_start(self):
+        self.store_intent()
+        self.rows = [dict(self.detail, id='old', head_sha='f' * 40)]
+        with patch.object(runtime, 'verify_live_service', side_effect=[None, InvalidReview('suspended')]):
+            with self.assertRaisesRegex(InvalidReview, 'suspended'):
+                trigger.start()
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn('/old/command', self.calls[0][0])
+
     def test_startup_one_observation(self):
         self.store_receipt()
         trigger.startup()
         self.assertEqual(len(self.calls), 1)
+        saved = json.loads((Path(self.temp.name) / 'preloop-startup/receipt.json').read_text())
+        self.assertEqual(saved['status'], 'RUNNING')
+        self.assertEqual(saved['startup_receipt']['commit'], self.intent['head_sha'])
+
+    def test_queued_and_failed_launches_are_saved_but_not_accepted(self):
+        self.store_receipt()
+        for state in ['PENDING', 'FAILED', 'CANCELLED', 'TIMED_OUT']:
+            self.detail['status'] = state
+            with self.subTest(state=state), self.assertRaises(InvalidReview):
+                trigger.startup()
+            saved = Path(self.temp.name) / 'preloop-startup/receipt.json'
+            self.assertEqual(json.loads(saved.read_text())['status'], state)
+            saved.unlink()
+        self.assertEqual(len(self.calls), 4)  # One request per explicit invocation, no retry.
 
     def test_startup_rejects_wrong_execution(self):
         self.store_receipt()
@@ -141,6 +172,7 @@ class TriggerTests(unittest.TestCase):
                 self.detail['startup_receipt'] = dict(original, **{key: value})
                 with self.assertRaises(InvalidReview):
                     trigger.startup()
+                (Path(self.temp.name) / 'preloop-startup/receipt.json').unlink()
 
 
 if __name__ == '__main__':

@@ -96,10 +96,14 @@ def publish():
     checks = runtime.github_pages(github, root + '/commits/' + head +
                                   '/check-runs?check_name=Preloop%20review&filter=all', 'check_runs')
     intents = [check for check in checks if check.get('external_id') == 'briar-preloop:' + proof['claim_sha256']]
+    require(len(intents) <= 1, 'Duplicate check intent; reconcile before recovery')
+    if intents:
+        require(intents[0].get('head_sha') == head and intents[0].get('name') == 'Preloop review' and
+                intents[0].get('app', {}).get('slug') == 'github-actions', 'Wrong existing check intent')
     require(matching or not intents, 'Ambiguous earlier review send; reconcile before replay')
     # This genuine check is created by the actual trusted Actions publisher,
     # tied to the reviewed SHA and workflow run, never by a desktop status script.
-    check = github(root + '/check-runs', 'POST', {
+    check = intents[0] if intents else github(root + '/check-runs', 'POST', {
         'name': 'Preloop review', 'head_sha': head, 'status': 'in_progress', 'details_url': run_url,
         'external_id': 'briar-preloop:' + proof['claim_sha256'],
         'output': {'title': 'Validated Preloop result; publication pending', 'summary': 'Review intent recorded.',
@@ -117,17 +121,19 @@ def publish():
         no_supersession(binding, token, completion)
         conclusion = 'success' if proof['state'] == 'success' else 'failure'
         github(root + '/check-runs/' + str(check['id']), 'PATCH', {
-            'status': 'completed', 'conclusion': conclusion,
+            'status': 'completed', 'conclusion': conclusion, 'details_url': run_url,
             'output': {'title': 'Preloop review published', 'summary': readback['html_url'], 'text': marker}})
-        status = runtime.commit_status(github, binding, head, proof['state'], run_url,
-                                        'Complete review published and independently read back.')
         actual_check = github(root + '/check-runs/' + str(check['id']))
         require(actual_check['head_sha'] == head and actual_check['conclusion'] == conclusion and
                 actual_check['status'] == 'completed' and actual_check['external_id'] == check['external_id'],
                 'Review check readback mismatch')
         require(actual_check['name'] == 'Preloop review' and
-                actual_check.get('app', {}).get('slug') == 'github-actions', 'Wrong review check actor')
+                actual_check.get('app', {}).get('slug') == 'github-actions' and
+                actual_check.get('details_url') == run_url, 'Wrong review check actor or run link')
         runtime.current_pr(github, binding, number, head, base)
+        no_supersession(binding, token, completion)
+        status = runtime.commit_status(github, binding, head, proof['state'], run_url,
+                                        'Complete review and genuine check independently read back.')
         runtime.write_receipt(Path(os.environ['RUNNER_TEMP']) / 'preloop-publication', {
             'execution_id': eid, 'head_sha': head, 'base_sha': base, 'claim_sha256': proof['claim_sha256'],
             'review_id': review['id'], 'review_url': readback['html_url'], 'check_id': check['id'],

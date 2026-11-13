@@ -68,3 +68,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PRELOOP_CI_TRIGGER_TOKEN: ${{ secrets.PRELOOP_CI_TRIGGER_TOKEN }}
         run: python3 .github/preloop/trigger.py startup
+      - name: Preserve the single startup observation
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node24
+        with:
+          name: preloop-startup-${{ steps.start.outputs.execution_id }}
+          path: ${{ runner.temp }}/preloop-startup/receipt.json
+          if-no-files-found: warn
+          retention-days: 31

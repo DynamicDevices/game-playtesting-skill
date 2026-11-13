@@ -38,7 +38,7 @@ def request(origin, path, token='', method='GET', body=None):
         def redirect_request(self, *_args, **_kwargs):
             return None
     headers = {'Accept': 'application/json', 'Content-Type': 'application/json',
-               'User-Agent': 'Briar-Preloop-Publisher/2'}
+               'User-Agent': 'Briar-Preloop-Publisher/2', 'Cache-Control': 'no-cache'}
     if token:
         headers['Authorization'] = 'Bearer ' + token
     req = urllib.request.Request(origin + path,
