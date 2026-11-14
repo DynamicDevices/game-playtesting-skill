@@ -12,11 +12,12 @@ class LiveRevocationTests(unittest.TestCase):
     def setUp(self):
         self.names = {'preloop-review-trigger.yml': 100, 'preloop-review-publish.yml': 101}
         self.binding = dict(repository='example/repository', repository_id=42, default_branch='main',
-                            live_revocation=dict(mechanism='github-actions-workflow-and-run-v1',
+                            live_revocation=dict(mechanism='github-actions-path-source-and-run-v1',
                                                  explicit_posture_approval=True,
-                                                 workflow_ids=self.names))
+                                                 workflow_paths={name: '.github/workflows/' + name
+                                                                 for name in self.names}))
         self.workload = dict(workflow_sha='a' * 40, event_name='repository_dispatch', run_attempt='1')
-        self.workflows = {str(value): dict(id=value, state='active', path='.github/workflows/' + name)
+        self.workflows = {name: dict(id=value, state='active', path='.github/workflows/' + name)
                           for name, value in self.names.items()}
         self.run = dict(id=12, repository={'id': 42}, workflow_id=101, head_sha='a' * 40,
                         head_branch='main', event='repository_dispatch', run_attempt=1,
@@ -79,19 +80,33 @@ class LiveRevocationTests(unittest.TestCase):
             with self.subTest(field=key), self.assertRaises(InvalidReview):
                 self.verify()
             self.run = original
-        self.workflows['101']['path'] = '.github/workflows/other.yml'
+        self.workflows['preloop-review-publish.yml']['path'] = '.github/workflows/other.yml'
         with self.assertRaises(InvalidReview):
             self.verify()
 
     def test_unsigned_or_incomplete_opt_in_is_denied_before_api_read(self):
         original = copy.deepcopy(self.binding['live_revocation'])
         for value in [None, {}, dict(original, explicit_posture_approval=False),
-                      dict(original, workflow_ids={'preloop-review-publish.yml': 101}),
-                      dict(original, workflow_ids={**self.names, 'preloop-review-trigger.yml': True})]:
+                      dict(original, workflow_paths={'preloop-review-publish.yml': '.github/workflows/preloop-review-publish.yml'}),
+                      dict(original, workflow_paths={name: '../' + name for name in self.names}),
+                      dict(original, mechanism='github-actions-workflow-and-run-v1')]:
             self.binding['live_revocation'] = value
             with self.subTest(value=value), self.assertRaises(InvalidReview):
                 self.verify()
         self.assertEqual(self.calls, [])
+
+    def test_reregistered_workflow_requires_matching_live_run_id(self):
+        self.workflows['preloop-review-publish.yml']['id'] = 202
+        with self.assertRaises(InvalidReview):
+            self.verify()
+        self.run['workflow_id'] = 202
+        self.verify()  # Approved path/source identity, not preallocated incarnation.
+
+    def test_missing_malformed_or_colliding_live_ids_are_denied(self):
+        for value in [None, True, 0, 100]:
+            self.workflows['preloop-review-publish.yml']['id'] = value
+            with self.subTest(value=value), self.assertRaises(InvalidReview):
+                self.verify()
 
     def test_unavailable_online_control_fails_closed(self):
         with patch.object(runtime.trust, 'request', side_effect=OSError('fixture unavailable')):

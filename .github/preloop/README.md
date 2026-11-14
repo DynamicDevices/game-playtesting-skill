@@ -112,9 +112,17 @@ Before each GitHub write or native trigger/stop, the candidate rechecks the
 signature, expiry and source bytes, then fetches the current states of both
 repository review workflows and the exact running Actions attempt. The signed
 repository binding must explicitly approve `live_revocation` with
-`mechanism: github-actions-workflow-and-run-v1`, `explicit_posture_approval: true`
-and `workflow_ids` mapping both `preloop-review-trigger.yml` and
-`preloop-review-publish.yml` to their actual immutable numeric GitHub IDs.
+`mechanism: github-actions-path-source-and-run-v1`, `explicit_posture_approval: true`
+and `workflow_paths` mapping both `preloop-review-trigger.yml` and
+`preloop-review-publish.yml` to their exact `.github/workflows/NAME` paths.
+The same signed policy pins complete source hashes and OIDC workflow/ref identity.
+At each write boundary, resolve each filename through GitHub, verify its path and
+active state, and bind the current run to that live numeric workflow ID. Numeric
+IDs need not exist before bootstrap installation. Re-registration of identical
+approved source at the same path remains eligible only if all other signed
+source, OIDC, run/attempt and live-state checks pass; this is path/source identity,
+not a numeric incarnation pinned forever. Alex selected this design correction;
+final exact hardware-signed policies and live acceptance remain mandatory.
 Missing approval, API failure, disabled/substituted workflows, cancelled or
 completed runs, changed revisions and old attempts deny the operation.
 

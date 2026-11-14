@@ -26,22 +26,25 @@ def verify_live_service(binding, workload, workflow):
     require(fresh == binding, 'Publication authority changed during the run')
     policy = binding.get('live_revocation')
     require(type(policy) is dict and
-            policy.get('mechanism') == 'github-actions-workflow-and-run-v1' and
+            policy.get('mechanism') == 'github-actions-path-source-and-run-v1' and
             policy.get('explicit_posture_approval') is True,
             'Missing accepted live service-revocation mechanism')
     names = {'preloop-review-trigger.yml', 'preloop-review-publish.yml'}
-    identities = policy.get('workflow_ids')
-    require(type(identities) is dict and set(identities) == names and workflow in names and
-            all(type(value) is int and value > 0 for value in identities.values()),
-            'Missing immutable workflow identities')
+    paths = policy.get('workflow_paths')
+    require(type(paths) is dict and set(paths) == names and workflow in names and
+            all(paths[name] == '.github/workflows/' + name for name in names),
+            'Missing exact signed workflow paths')
     root = '/repos/' + binding['repository']
+    identities = {}
     for name in sorted(names):
         observed = trust.request('https://api.github.com',
-                                 root + '/actions/workflows/' + str(identities[name]),
+                                 root + '/actions/workflows/' + name,
                                  os.environ['GH_TOKEN'])
-        require(observed.get('id') == identities[name] and
-                observed.get('path') == '.github/workflows/' + name and
+        require(type(observed.get('id')) is int and observed['id'] > 0 and
+                observed.get('path') == paths[name] and
                 observed.get('state') == 'active', 'Review workflow suspended or substituted')
+        identities[name] = observed['id']
+    require(len(set(identities.values())) == len(names), 'Workflow identities collide')
     run_id = os.environ['GITHUB_RUN_ID']
     require(run_id.isdigit(), 'Malformed live workload run')
     run = trust.request('https://api.github.com', root + '/actions/runs/' + run_id,
