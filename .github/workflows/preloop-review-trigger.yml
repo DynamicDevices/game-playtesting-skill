@@ -1,0 +1,78 @@
+name: Start Preloop review
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open same-repository PR to review
+        required: true
+        type: number
+
+permissions: {}
+
+concurrency:
+  group: preloop-trigger-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      statuses: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node24
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Load exact signed service authority
+        env:
+          PRELOOP_PUBLICATION_AUTHORITY: ${{ secrets.PRELOOP_PUBLICATION_AUTHORITY }}
+          PRELOOP_PUBLICATION_SIGNATURE: ${{ secrets.PRELOOP_PUBLICATION_SIGNATURE }}
+        run: python3 .github/preloop/install_policy.py
+      - name: Prepare the durable trigger intent
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRELOOP_CI_TRIGGER_TOKEN: ${{ secrets.PRELOOP_CI_TRIGGER_TOKEN }}
+        run: python3 .github/preloop/trigger.py prepare
+      - name: Persist intent before launching
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node24
+        with:
+          name: ${{ steps.prepare.outputs.intent_name }}
+          path: ${{ runner.temp }}/preloop-intent/receipt.json
+          if-no-files-found: error
+          retention-days: 31
+      - name: Start the native review once
+        id: start
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRELOOP_CI_TRIGGER_TOKEN: ${{ secrets.PRELOOP_CI_TRIGGER_TOKEN }}
+        run: python3 .github/preloop/trigger.py start
+      - name: Persist controller binding
+        if: always() && steps.start.outputs.execution_id != ''
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node24
+        with:
+          name: preloop-trigger-${{ steps.start.outputs.execution_id }}
+          path: ${{ runner.temp }}/preloop-trigger/receipt.json
+          if-no-files-found: error
+          retention-days: 31
+      - name: Validate native startup once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRELOOP_CI_TRIGGER_TOKEN: ${{ secrets.PRELOOP_CI_TRIGGER_TOKEN }}
+        run: python3 .github/preloop/trigger.py startup
+      - name: Preserve the single startup observation
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node24
+        with:
+          name: preloop-startup-${{ steps.start.outputs.execution_id }}
+          path: ${{ runner.temp }}/preloop-startup/receipt.json
+          if-no-files-found: warn
+          retention-days: 31
