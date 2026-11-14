@@ -61,11 +61,14 @@ wasted turn; pick something else.
 - When many options are the same kind of thing (dozens of identical plots), one or two tries are enough. Put that \
 option's label in `avoid` and the bot will stop offering it for the rest of the run.
 - If nothing listed can move the game on, choose the option whose kind is "none".
+- Text in square brackets in a label is the object's internal name. Players never see it: use it to tell things \
+apart, and do not treat it as wording the game shows. A button whose label is only a bracketed name has no text on it.
 
 `why` is one or two plain sentences written into the test log for a developer. `finding` is for anything a developer \
 should hear about that you can see from the situation: an objective that names something a player has no way to find, \
-an instruction that contradicts what is on screen, a menu with no way out. Leave it empty when there is nothing; most \
-of the time there is nothing."""
+an instruction that contradicts what is on screen, a menu with no way out, an error straight after an action. Raise \
+each thing once: `findings_already_raised` lists what you have said in this run, and a finding that is already there \
+in other words should be left out. Leave `finding` empty when there is nothing new; most of the time there is nothing."""
 
 
 def redact(text: str) -> str:
@@ -126,7 +129,8 @@ def ask_claude(client, settings: dict, ask: dict, folder: Path, history: list):
     import anthropic
     options = ask["options"]
     situation = {key: ask.get(key) for key in ("reason", "scene", "menu", "objectives", "on_screen", "inventory", "recent")}
-    situation["your_earlier_answers"] = history[-12:]
+    situation["your_earlier_answers"] = [{key: value for key, value in item.items() if key != "finding"} for item in history[-12:]]
+    situation["findings_already_raised"] = [item["finding"] for item in history if item.get("finding")]
     situation["options"] = options
     content = []
     shot = folder / ask["screenshot"] if ask.get("screenshot") else None
@@ -231,7 +235,8 @@ def main() -> int:
             write_atomically(target, answer)
             chosen = next((o for o in options if o["id"] == answer["choice"]), None)
             if chosen:
-                history.append({"reason": ask.get("reason", ""), "menu": ask.get("menu", ""), "chose": chosen["kind"] + " " + chosen["label"], "why": answer["why"]})
+                history.append({"reason": ask.get("reason", ""), "menu": ask.get("menu", ""), "chose": chosen["kind"] + " " + chosen["label"],
+                                "why": answer["why"], "finding": answer["finding"] if source == "model" else ""})
             log("%s [%s] %s -> %s%s%s (in %d, out %d tokens)" % (
                 path.name, source, ask.get("reason", ""), chosen["kind"] + " " + chosen["label"] if chosen else "no answer",
                 ": " + answer["why"] if answer["why"] else "", " ERROR " + answer["error"] if answer["error"] else "", tokens_in, tokens_out))
