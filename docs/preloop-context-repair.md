@@ -27,8 +27,10 @@ uploaded source packet. Missing context, checkout, base or diff access must be a
 explicit error, not a pass. The trusted publisher's independent exact-revision,
 diff, challenge, controller-receipt, authority and publication checks remain.
 
-The local complete prefix proposal is dd-review-context-prefix.txt in the owning
-work record, with these instructions in addition to the four fields above.
+The exact complete prefix proposal is [preloop-review-context-prefix.txt](preloop-review-context-prefix.txt),
+copied byte-for-byte from dd-review-context-prefix.txt in the owning work record,
+with these instructions in addition to the four fields above. It is review data,
+not executable preparation code or a runtime-installed change.
 Prepending it to baseline4cb74500b44124bd61d8d259980efe2c5ca6dc35c0085a9ad2286ac621317a07
 produces proposed configuration hash
 591136b6c1f99e4741719720ac27893db39e9fa195d226d6d6444b6441efc63b;
