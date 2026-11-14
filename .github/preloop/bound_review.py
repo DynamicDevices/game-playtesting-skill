@@ -53,7 +53,7 @@ def bind_completed_review(completion, intent, receipt, execution, artifact, diff
     startup = execution.get("startup_receipt")
     require(type(startup) is dict and startup.get("version") == 1 and
             startup.get("executor") == "hosted" and
-            startup.get("lease_revoked") is None and
+            startup.get("lease_revoked") is True and
             startup.get("checkout_verified") is True and
             startup.get("setup_completed") is True and
             startup.get("commit") == intent["head_sha"] and

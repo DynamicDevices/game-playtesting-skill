@@ -140,6 +140,15 @@ revocation separately requires service suspension and policy/credential handling
 
 Startup makes one execution-detail read and saves the allowlisted controller
 observation as `preloop-startup-EXECUTION` before interpreting startup proof.
+
+The native receipt has a lifecycle: `lease_revoked` is null while running and
+literal true after confirmed terminal read-lease cleanup. Running startup accepts
+only null; already-successful startup and completed-result publication require
+true. Missing/false/malformed cleanup proof refuses completed publication. The
+exact admitted commit, controller-observed checkout/setup and agent-start checks
+remain mandatory. An owner-account response omits this restricted-CI receipt;
+inspect it with the repository-bound CI identity, not the owner schema.
+
 Queued/failed executions do not count as running. No sleep loop, polling or
 automatic re-trigger compensates for startup timing. A live queued observation
 remains a failed startup gate requiring phase diagnosis, not successful delivery.

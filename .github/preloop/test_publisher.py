@@ -32,7 +32,7 @@ class PublisherTests(unittest.TestCase):
         self.detail = dict(self.intent, id=self.eid, status='SUCCEEDED', start_time='2026-11-13T15:00:00Z',
                            startup_receipt=dict(version=1, executor='hosted', checkout_verified=True,
                                                 setup_completed=True, commit='a' * 40,
-                                                agent_started_at='2026-11-13T15:00:01Z'))
+                                                agent_started_at='2026-11-13T15:00:01Z', lease_revoked=True))
         self.completion = dict(self.intent, execution_id=self.eid, status='SUCCEEDED', result_ready=True,
                                event_id='73db8ab4-33db-4359-a135-9f20edc61ff8',
                                result_sha256=canonical_digest(self.result))
