@@ -9,7 +9,8 @@ has progress.txt, and the report reads that instead; it has the same lines but n
 
 The report lists what the bot got done (milestones, items, objectives), what held it up, and every error. It exits
 with 1 if anything needs attention: an error that isn't in the known-issues file, a stall, a pause, a menu that was
-still up at the end with nothing done for 45 seconds, a run that never reached the game, or an --expect text that isn't in the log. Otherwise 0.
+still up at the end with nothing done for 45 seconds, a run without a DONE marker, a run that never reached the game,
+or an --expect text that isn't in the log. Otherwise 0.
 
 It reads a log and writes text. It checks what the bot logged, not whether the game is good to play.
 """
@@ -176,6 +177,8 @@ def main() -> int:
     known = known_issues(args.known_issues or beside(settings_file, settings["known_issues"]))
     f = summarise(args.log, settings, known)
     attention = []
+    if not f["done"]:
+        attention.append("the run has no completion marker; this is not a completed passing run")
     if f["game_start"] is None:
         attention.append("the run never reached the game" + (" (it stayed in: " + ", ".join(f["scenes"]) + ")" if f["scenes"] else ""))
     for t, text in f["pauses"]:

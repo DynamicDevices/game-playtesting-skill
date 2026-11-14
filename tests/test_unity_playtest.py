@@ -1,7 +1,7 @@
 """Offline checks of the Unity in-editor scripts against a stand-in editor and synthetic play logs.
 
 These do not start Unity, a game or a device. They show the scripts' own handling of checkpoints, workspace
-tidy-up, verdicts and session records; they are not evidence that any game or Unity version works.
+preservation, verdicts and session records; they are not evidence that any game or Unity version works.
 """
 
 import json
@@ -58,19 +58,19 @@ class RunnerTests(unittest.TestCase):
     def run_folder(self, label):
         return self.project / "Logs" / "Playtest" / ("playthrough-" + label)
 
-    def test_clean_run_is_tidied_recorded_and_kept(self):
+    def test_clean_run_preserves_workspace_and_records_checkpoint(self):
         self.saves.mkdir()
         (self.saves / "slot.txt").write_text("the developer's own save\n", encoding="utf-8")
         done = self.run_bot("first", "--fresh", "--until", "TutorialComplete = True", "--save-checkpoint", "after-tutorial")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("Result: OK", done.stdout)
         self.assertIn("session record is valid", done.stdout)
-        # the editor's rewrite is undone; a person's edit and the checked-in state are respected
-        self.assertEqual((self.project / "Assets" / "Thing.mat").read_text(encoding="utf-8"), "as checked in\n")
+        # An asset's extension cannot establish that the editor, not a person, changed it.
+        self.assertEqual((self.project / "Assets" / "Thing.mat").read_text(encoding="utf-8"), "rewritten by the editor\n")
         self.assertIn("edited by a person", (self.project / "Assets" / "Bot.cs").read_text(encoding="utf-8"))
         self.assertIn("left alone", done.stdout)
-        self.assertFalse((self.project / "Assets" / "InitTestScene123.unity").exists())
-        self.assertFalse((self.saves / "TestResults.xml").exists())
+        self.assertTrue((self.project / "Assets" / "InitTestScene123.unity").exists())
+        self.assertTrue((self.saves / "TestResults.xml").exists())
         # nothing was deleted: the save that was replaced is kept, and the new one is a named checkpoint
         checkpoints = Path(str(self.saves) + ".checkpoints")
         aside = [p for p in checkpoints.iterdir() if p.name.startswith("aside-")]
@@ -84,6 +84,19 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(checked.returncode, 0, checked.stderr)
         self.assertEqual(json.loads(checked.stdout)["session_status"], "pass")
         self.assertEqual(json.loads(record.read_text(encoding="utf-8"))["app"]["name"], "Synthetic Game")
+
+    def test_preexisting_asset_edits_and_leftovers_are_preserved(self):
+        material = self.project / "Assets" / "Thing.mat"
+        leftover = self.project / "Assets" / "InitTestScene-owner.unity"
+        material.write_text("owner's pending material edit\n", encoding="utf-8")
+        leftover.write_text("owner's scene\n", encoding="utf-8")
+        done = self.run_bot("preserve", "--keep-changes")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        # The stand-in editor overwrites the material itself; the runner must not then
+        # revert that edit to HEAD or delete a scene matching its old cleanup pattern.
+        self.assertEqual(material.read_text(encoding="utf-8"), "rewritten by the editor\n")
+        self.assertEqual(leftover.read_text(encoding="utf-8"), "owner's scene\n")
+        self.assertIn("test leftovers were kept", done.stdout)
 
     def test_starts_from_a_checkpoint(self):
         self.assertEqual(self.run_bot("first", "--fresh", "--save-checkpoint", "one").returncode, 0)
@@ -102,6 +115,18 @@ class RunnerTests(unittest.TestCase):
         self.assertFalse((Path(str(self.saves) + ".checkpoints") / "bad").exists())
         record = json.loads((self.run_folder("stuck") / "session.json").read_text(encoding="utf-8"))
         self.assertEqual(record["status"], "fail")
+
+    def test_invalid_session_prevents_success_and_checkpoint(self):
+        validator = self.project / "reject_record.py"
+        validator.write_text("import sys\nsys.exit(1)\n", encoding="utf-8")
+        settings_path = self.project / "unity-playtest.json"
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        settings["session_validator"] = str(validator)
+        settings_path.write_text(json.dumps(settings), encoding="utf-8")
+        done = self.run_bot("invalid", "--save-checkpoint", "bad-record")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("IS NOT VALID", done.stdout)
+        self.assertFalse((Path(str(self.saves) + ".checkpoints") / "bad-record").exists())
 
     def test_the_settings_line_does_not_answer_the_question(self):
         done = self.run_bot("echo", "--fresh", "--until", "until:")
@@ -177,10 +202,19 @@ class SettingsTests(unittest.TestCase):
 
     def test_template_settings_are_accepted(self):
         with tempfile.TemporaryDirectory() as folder:
-            (Path(folder) / "progress.txt").write_text("   1.0  SCENE  now Village\n", encoding="utf-8")
+            (Path(folder) / "playthrough.txt").write_text("   1.0  SCENE  now Village\n   2.0  DONE   time ended\n", encoding="utf-8")
             done = python(SCRIPTS / "unity_playtest_report.py", folder, "--settings",
                           ROOT / "skills/app-playtesting/assets/unity-playtest.json")
             self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_progress_without_completion_cannot_pass(self):
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "progress.txt").write_text("   1.0  SCENE  now Village\n", encoding="utf-8")
+            done = python(SCRIPTS / "unity_playtest_report.py", folder, "--session", "session.json")
+            self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+            self.assertIn("no completion marker", done.stdout)
+            record = json.loads((Path(folder) / "session.json").read_text(encoding="utf-8"))
+            self.assertEqual(record["status"], "fail")
 
     def test_scripts_explain_themselves(self):
         for script in sorted(SCRIPTS.glob("unity_playtest*.py")):

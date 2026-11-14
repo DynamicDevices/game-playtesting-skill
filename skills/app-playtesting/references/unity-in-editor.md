@@ -64,7 +64,7 @@ Four scripts in `scripts/` do the parts that are the same for every game. They
 need Python 3.9+, and the Unity command line or the editor program.
 
 - `unity_playtest.py LABEL [--until TEXT] [--fresh | --from-checkpoint NAME] [--save-checkpoint NAME]`
-  runs the bot, keeps and restores checkpoints, tidies the workspace (Plastic
+  runs the bot, keeps and restores checkpoints, reports workspace changes (Plastic
   SCM or git) and prints the report.
 - `unity_playtest_report.py RUN [--expect TEXT]` turns a play log into the
   report, the exit code and a session record.
@@ -135,7 +135,7 @@ raises one, `FINDING`.
 
 In this general form the scripts have been run live on one game on macOS with
 Plastic SCM: the runner, report and coverage on several runs, and the adviser on
-one 15-minute run (41 questions). The git tidy-up, Windows and Linux have only
+one 15-minute run (41 questions). Workspace preservation, Windows and Linux have only
 been run against a stand-in editor in this repository's offline tests.
 
 ## Checkpoints
@@ -161,9 +161,12 @@ Keep it awake for the run (`caffeinate` on macOS) and log a `PAUSE` line if the
 test loop ever stops for longer than a normal long step; distrust such a run.
 
 Opening a project can rewrite many asset files (materials, render pipeline
-settings). Undo only the kinds of file the editor rewrites, and report anything
-else the runner left alone, so you never revert the developer's own edits. Do
-not check the rewrites in. Changing the bot's source during a run has no effect
+settings). The runner preserves all workspace changes and test leftovers: a file
+extension and a before/after status cannot distinguish editor rewrites from edits
+made by a person during the run. Inspect the diff and new files before deciding
+what to keep or discard; do not automatically check the rewrites in. The old
+`--keep-changes` flag remains accepted, and the `leftovers` setting no longer
+causes deletion. Changing the bot's source during a run has no effect
 on that run; the editor compiled it at the start. Close the project in the
 editor first, or use a second copy.
 

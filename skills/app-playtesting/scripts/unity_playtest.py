@@ -14,7 +14,7 @@ What this does, in order:
      no save (a new game) or from a copy of the named checkpoint
   3. runs the test with the Unity CLI (`unity test`), or with the editor program if --editor-path is given
   4. prints the result, any compile errors, and where the logs are
-  5. undoes the asset and settings files the editor rewrote during the run, and removes files the run left behind
+  5. reports workspace changes without reverting or deleting them
   6. prints the report; each --until text is also checked, so the exit code is the verdict
   7. with --save-checkpoint, keeps the saved game under that name, but only if the report was clean
 
@@ -22,10 +22,11 @@ With --adviser the bot may ask Claude what to do when its rules run out. That se
 screenshot when there is one) to the Claude API and costs money; see unity_playtest_adviser.py. Without it nothing
 leaves the computer.
 
-Nothing is deleted: a save that is replaced is kept as a checkpoint called "aside-<date>-<label>". This script
+Workspace changes are preserved: the runner cannot tell editor rewrites from concurrent human edits.
+A save that is replaced is kept as a checkpoint called "aside-<date>-<label>". This script
 drives a local developer project only. It does not install anything or change security settings, and without
 --adviser it does not contact a network.
-Run live on macOS with Plastic SCM; the git path is covered by an offline test with a stand-in editor only.
+Run live on macOS with Plastic SCM; workspace preservation is covered by an offline stand-in editor only.
 """
 import argparse
 import os
@@ -40,8 +41,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from unity_playtest_common import beside, find_project, load_settings  # noqa: E402
 
 NAME = r"[A-Za-z0-9_-]+"
-HAND_WRITTEN = {".cs", ".asmdef", ".asmref", ".shader", ".hlsl", ".cginc", ".py", ".sh", ".md", ".txt", ".json", ".xml",
-                ".yml", ".yaml", ".uxml", ".uss"}
 
 
 def editor_version(project: Path) -> str:
@@ -102,17 +101,8 @@ def milestones(play_log: Path, text: str) -> str:
     return ", ".join(re.findall(r"(?m)^\d+ (\w*" + re.escape(text) + r"\w*) = True$", final))
 
 
-def editor_owned(project: Path, path: Path) -> bool:
-    """True for a file the editor rewrites by itself when it opens a project: an asset or a setting, not code or text."""
-    try:
-        parts = path.resolve().relative_to(project).parts
-    except ValueError:
-        return False
-    return bool(parts) and parts[0] in ("Assets", "ProjectSettings", "Packages") and path.suffix.lower() not in HAND_WRITTEN
-
-
 class Workspace:
-    """The project's version control: Plastic SCM or git. Used to see what a run changed, and to put it back."""
+    """The project's version control: Plastic SCM or git. Used only to report changes and the build."""
 
     def __init__(self, project: Path):
         self.project, self.kind, self.top = project, None, project
@@ -143,13 +133,6 @@ class Workspace:
                 return None
             return {str(self.top / entry[3:]) for entry in out.stdout.split("\0") if len(entry) > 3}
         return None
-
-    def undo(self, paths):
-        for i in range(0, len(paths), 100):
-            if self.kind == "plastic":
-                self.run("cm", "undo", *paths[i:i + 100])
-            elif self.kind == "git":
-                self.run("git", "checkout", "--", *paths[i:i + 100])
 
     def build(self) -> str:
         """What the workspace is on, for the session record."""
@@ -183,7 +166,7 @@ def main() -> int:
     parser.add_argument("--project", type=Path, default=None, help="Unity project folder (default: found from the current folder)")
     parser.add_argument("--editor-path", default=None, help="run this Unity editor program instead of the Unity CLI")
     parser.add_argument("--timeout", type=int, default=3000, help="seconds before the run is abandoned (default 3000)")
-    parser.add_argument("--keep-changes", action="store_true", help="don't undo the files the editor changed")
+    parser.add_argument("--keep-changes", action="store_true", help="compatibility option; workspace changes are always kept")
     args = parser.parse_args()
 
     project = args.project or find_project(Path.cwd())
@@ -225,10 +208,7 @@ def main() -> int:
     workspace = Workspace(project)
     before = workspace.changed()
     if before is None:
-        print("note: no usable version control (Plastic or git) was found, so files the editor changes won't be undone")
-    leftovers_before = {path for pattern in settings["leftovers"] for path in project.glob(pattern)}
-    dump = saves / "TestResults.xml"  # the test runner drops a copy of its results beside the saves
-    had_dump = dump.exists()
+        print("note: no usable version control (Plastic or git) was found; workspace changes cannot be listed")
 
     memory = run_folder / "bot-memory.txt"
     if args.fresh or args.from_checkpoint:
@@ -302,27 +282,13 @@ def main() -> int:
     else:
         print("no test results were written; read " + str(editor_log))
 
-    # tidy up: only the kinds of file the editor rewrites (assets and settings), and only ones that changed during
-    # this run. Files that were already changed are left alone, and so is anything a person may be editing while
-    # the run is going: code, scripts, documents.
-    if not args.keep_changes and before is not None:
+    # A before/after status and an extension do not establish who made an edit.
+    # Preserve both tracked changes and new files, including apparent test leftovers.
+    if before is not None:
         changed = sorted((workspace.changed() or set()) - before)
-        mine = [path for path in changed if editor_owned(project, Path(path))]
-        workspace.undo(mine)
-        print("undid %d files the editor changed during the run" % len(mine))
         for path in changed:
-            if path not in mine:
-                print("left alone (changed during the run, not by the editor): " + path)
-    for pattern in settings["leftovers"]:
-        for leftover in project.glob(pattern):
-            if leftover in leftovers_before:
-                continue
-            if leftover.is_dir():
-                shutil.rmtree(leftover)
-            elif leftover.is_file():
-                leftover.unlink()
-    if dump.exists() and not had_dump:
-        dump.unlink()
+            print("left alone (changed during the run; author unknown): " + path)
+    print("workspace changes and test leftovers were kept; inspect them before any cleanup")
 
     play_log = run_folder / ("playthrough-" + args.label) / "playthrough.txt"
     if play_log.exists():
@@ -346,6 +312,8 @@ def main() -> int:
             checked = subprocess.run([sys.executable, "-I", "-B", str(validator), str(record)], capture_output=True, text=True)
             print("session record " + ("is valid: " + checked.stdout.strip() if checked.returncode == 0
                                        else "IS NOT VALID: " + (checked.stderr or checked.stdout).strip()))
+            if checked.returncode != 0:
+                verdict = 1
     elif not play_log.exists() and test_filter == settings["test_filter"]:
         print("the bot wrote no play log, so there is nothing to report on")
         verdict = 1  # another test (--filter) has no play log and is judged by its own result
