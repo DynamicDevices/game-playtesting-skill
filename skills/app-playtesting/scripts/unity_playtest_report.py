@@ -8,8 +8,8 @@ Give it a run's folder or its playthrough.txt. While a run is still going (or if
 has progress.txt, and the report reads that instead; it has the same lines but no final list of errors.
 
 The report lists what the bot got done (milestones, items, objectives), what held it up, and every error. It exits
-with 1 if anything needs attention: an error that isn't in the known-issues file, a stall, a pause, a menu the bot
-never got out of, a run that never reached the game, or an --expect text that isn't in the log. Otherwise 0.
+with 1 if anything needs attention: an error that isn't in the known-issues file, a stall, a pause, a menu that was
+still up at the end with nothing done for 45 seconds, a run that never reached the game, or an --expect text that isn't in the log. Otherwise 0.
 
 It reads a log and writes text. It checks what the bot logged, not whether the game is good to play.
 """
@@ -87,6 +87,7 @@ def summarise(path: Path, settings: dict, known: list):
         "goal_notes": [text for _, tag, text in events if tag == "GOAL" and text.startswith("nothing usable")],
         "done": next((text for _, tag, text in events if tag == "DONE"), ""),
         "game_start": game_start,
+        "last_action": max([t for t, tag, _ in events if tag in ("PRESS", "CHOOSE", "LEAVE", "USE", "WALK", "PICK", "RATE", "TOLD")], default=0.0),
         "errors": errors,
         "new_errors": [(n, e) for n, e in errors if not any(k in e for k in known)],
         "lines": [tag + " " + text for _, tag, text in events],
@@ -181,8 +182,11 @@ def main() -> int:
         attention.append("at %.0f s %s (is the computer going to sleep? the rest of the run can't be trusted)" % (t, text))
     for t, text in f["stalls"]:
         attention.append("stalled at %.0f s: %s" % (t, text))
-    for t, name in f["menus_held"]:
-        attention.append("the %s menu opened at %.0f s and was still up at the end" % (name, t))
+    # a menu that opened just before the time ran out is not a fault; one the bot did nothing with for 45 s is
+    stuck_menus = [(t, name) for t, name in f["menus_held"] if f["length"] - max(t, f["last_action"]) > 45]
+    for t, name in stuck_menus:
+        attention.append("the %s menu opened at %.0f s and was still up at the end, with nothing done for the last %.0f s"
+                         % (name, t, f["length"] - max(t, f["last_action"])))
     for n, e in f["new_errors"]:
         attention.append("error (%dx): %s" % (n, e))
     if f["done"].startswith("held by"):
@@ -226,6 +230,8 @@ def main() -> int:
     block("Stopped moving on the way to (%d tries)" % sum(f["stuck"].values()), ["%dx %s" % (n, name) for name, n in f["stuck"].most_common(10)])
     block("Sequences still running at the end", f["still_running"])
     block("All errors", ["%dx %s%s" % (n, e, "" if (n, e) in f["new_errors"] else "  [known]") for n, e in f["errors"]])
+    block("Menus open when the run ended (not for long enough to count as stuck)",
+          ["%s, opened at %.0f s" % (name, t) for t, name in f["menus_held"] if (t, name) not in stuck_menus])
     print("\nSpeech lines: %d. Conversation choices: %d. Ended: %s" % (f["speech"], len(f["picks"]), f["done"] or "time ran out"))
     if f["setup"]:
         print("Run settings: " + f["setup"])
