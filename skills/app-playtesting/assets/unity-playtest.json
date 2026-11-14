@@ -1,0 +1,15 @@
+{
+  "app": "Fill in the game's name",
+  "company": "Fill in Unity's Company Name",
+  "product": "Fill in Unity's Product Name",
+  "save_folder": "",
+  "run_folder": "Logs/Playtest",
+  "test_filter": "PlaytestBot",
+  "max_minutes": 0,
+  "start_scenes": [],
+  "milestone_text": "Complete",
+  "hud_menus": [],
+  "known_issues": "",
+  "catalogue": "",
+  "leftovers": ["Assets/InitTestScene*"]
+}

@@ -58,6 +58,49 @@ A play-mode test framework reports `Passed` whatever the bot found. The verdict
 is the report and exit code, never the test result. A run with no question ends
 by itself when nothing new has happened for several minutes.
 
+## The scripts and what the bot must do
+
+Three scripts in `scripts/` do the parts that are the same for every game. They
+need Python 3.9+, and the Unity command line or the editor program.
+
+- `unity_playtest.py LABEL [--until TEXT] [--fresh | --from-checkpoint NAME] [--save-checkpoint NAME]`
+  runs the bot, keeps and restores checkpoints, tidies the workspace (Plastic
+  SCM or git) and prints the report.
+- `unity_playtest_report.py RUN [--expect TEXT]` turns a play log into the
+  report, the exit code and a session record.
+- `unity_playtest_coverage.py` adds runs up into what has and hasn't been tried.
+
+The game's details go in one settings file, `unity-playtest.json`, in the
+project folder (or `--settings`). Start from [the template](../assets/unity-playtest.json):
+the game's name, Unity's Company and Product names (they locate the saved
+games), the bot's test name, the scenes that come before the game proper, and
+optional files of known errors and of every scripted sequence.
+
+The bot is the game's own play-mode test; this skill does not supply one,
+because how to press a button or walk is different in every game. It must:
+
+- read `PLAYTEST_LABEL`, `PLAYTEST_RUN_FOLDER`, `PLAYTEST_MEMORY`, and when set
+  `PLAYTEST_UNTIL` (texts joined with `||`), `PLAYTEST_MINUTES` and
+  `PLAYTEST_IDLE_MINUTES`;
+- write `playthrough-<label>/progress.txt` as it goes and `playthrough.txt` at
+  the end, in the run folder, with any screenshots beside them;
+- write one event per line as seconds, two spaces, a tag, then text:
+  `  12.3  VAR    TutorialComplete = True`.
+
+Tags the report understands, all optional: `SETUP` (the bot's settings),
+`SCENE now <name>`, `VAR`, `OBJ`, `USE`, `SAY`, `PICK`, `CHOOSE`, `RATE`,
+`INV+`/`INV-`, `BEGIN`/`END` (a scripted sequence), `MENU <name> is open`,
+`MENU+`, `MENU-`, `LEAVE <name>`, `GOAL nothing usable matches`, `STUCK short of <name> by <n>m`,
+`STALL?`, `PAUSE`, `ERROR` and `DONE <why the run ended>`. Sections after the
+events start with `=== `: `FINAL VARIABLES`, `HOTSPOTS` (one line per
+interactive thing: `used N` or `never`, `on` or `off`, label, object name,
+place, and why it could not be reached, separated by ` | `) and `ERRORS`
+(`3x <text>`).
+
+The scripts were run live as part of one game's own skill before being made
+general. In this general form they have been run only against a stand-in editor
+and synthetic logs in this repository's offline tests.
+
 ## Checkpoints
 
 Keep saved games as named checkpoints so a later step starts in minutes, not
