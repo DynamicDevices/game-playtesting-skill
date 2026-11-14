@@ -33,6 +33,7 @@ DEFAULTS = {
     "adviser_keychain_service": "",   # macOS only: a Keychain item that holds the API key, instead of the environment
     "adviser_keychain_account": "",
     "adviser_notes": "",              # a few sentences about the game, added to what the model is told
+    "adviser_remember": False,        # reuse an earlier run's answer for the same situation (cheaper, but runs repeat themselves)
 }
 SETTINGS_NAME = "unity-playtest.json"
 

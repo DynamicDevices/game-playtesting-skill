@@ -20,5 +20,6 @@
   "adviser_keychain_service": "",
   "adviser_keychain_account": "",
   "adviser_notes": "",
-  "session_validator": ""
+  "session_validator": "",
+  "adviser_remember": false
 }

@@ -38,7 +38,7 @@ class RunnerTests(unittest.TestCase):
         (self.project / "unity-playtest.json").write_text(json.dumps({
             "app": "Synthetic Game", "save_folder": str(self.saves), "start_scenes": ["Loader"],
             "known_issues": "known-issues.txt", "max_minutes": 40,
-            "session_validator": str(ROOT / "scripts" / "validate_session.py")}), encoding="utf-8")
+            "session_validator": str(ROOT / "scripts" / "validate_session.py"), "adviser_remember": True}), encoding="utf-8")
         (self.project / ".gitignore").write_text("Logs/\n", encoding="utf-8")
         identity = ["-c", "user.name=Offline Test", "-c", "user.email=offline@example.invalid", "-c", "commit.gpgsign=false"]
         for command in (["init", "-q"], ["add", "-A"], [*identity, "commit", "-q", "-m", "synthetic project"]):

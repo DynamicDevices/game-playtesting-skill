@@ -121,10 +121,11 @@ raises one, `FINDING`.
   macOS from a Keychain item named in the settings; it is never written or
   logged. The settings also choose the model, how hard it thinks, a limit on
   questions per run, and a few sentences about the game.
-- Answers are kept in `adviser-memory.json` beside the runs and reused once per
-  run for the same situation, so a repeat run costs less. Delete the file to
-  ask afresh. Runs with an adviser are less repeatable than runs by rules alone;
-  use rules alone for regression checks.
+- Runs with an adviser are less repeatable than runs by rules alone; use rules
+  alone for regression checks. With `adviser_remember` on, answers are kept in
+  `adviser-memory.json` beside the runs and reused once per run for the same
+  situation: cheaper, but runs from the same saved game then make the same
+  choices. It is off by default, so each run can try something new.
 
 In this general form the scripts have been run live on one game on macOS with
 Plastic SCM: the runner, report and coverage on several runs, and the adviser on

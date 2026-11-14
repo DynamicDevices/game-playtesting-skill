@@ -11,8 +11,9 @@ do what a player can, so Claude can only choose from the options given.
 
 What leaves the computer: each question's text and, when there is one, that moment's screenshot, to the Claude API.
 Nothing else is read or sent. Every question, answer and token count is written to adviser.log in the run's folder.
-An answer is remembered in adviser-memory.json beside the runs, so the same situation in a later run is answered
-without a call (once per run: if it comes round again the remembered answer changed nothing, and Claude is asked).
+With adviser_remember on in the settings, an answer is kept in adviser-memory.json beside the runs and the same
+situation in a later run is answered without a call (once per run). It is off by default: runs from the same saved
+game then repeat each other's choices, which is cheaper but explores nothing new.
 
 The API key is found the way the Anthropic SDK finds it (ANTHROPIC_API_KEY, or an `ant auth login` profile). On
 macOS the settings can instead name a Keychain item (adviser_keychain_service, adviser_keychain_account); the key is
@@ -235,7 +236,7 @@ def main() -> int:
             options = ask.get("options") or []
             answer, tokens_in, tokens_out, source = None, 0, 0, "model"
             # an answer from an earlier run is reused once per run; if the same situation comes round again, it changed nothing
-            remembered = memory.get(signature(ask)) if signature(ask) not in seen else None
+            remembered = memory.get(signature(ask)) if settings["adviser_remember"] and signature(ask) not in seen else None
             seen.add(signature(ask))
             match = next((o for o in options if remembered and o["kind"] + ":" + o["label"] == remembered["option"]), None)
             if not options:
@@ -251,7 +252,7 @@ def main() -> int:
                 except Exception as error:  # the bot must get an answer whatever went wrong, so it can carry on by its rules
                     answer = {"choice": "", "why": "", "avoid": [], "finding": "", "error": explain(error)}
                 chosen = next((o for o in options if o["id"] == answer["choice"]), None)
-                if chosen and not answer["error"]:
+                if chosen and not answer["error"] and settings["adviser_remember"]:
                     memory[signature(ask)] = {"option": chosen["kind"] + ":" + chosen["label"], "answer": dict(answer, choice="")}
                     memory_file.write_text(json.dumps(memory, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
             answer["id"] = ask.get("id", 0)
