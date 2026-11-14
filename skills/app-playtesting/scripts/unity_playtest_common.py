@@ -24,7 +24,7 @@ DEFAULTS = {
     "hud_menus": [],        # menus that are part of the normal screen, not ones that take it over
     "known_issues": "",     # a text file of error texts that don't fail a report, relative to this settings file
     "catalogue": "",        # a text file listing every scripted sequence ("group | scene | name"), for coverage
-    "leftovers": ["Assets/InitTestScene*"],  # files a test run leaves in the project, removed if the run made them
+    "leftovers": ["Assets/InitTestScene*"],  # files and folders a test run leaves in the project, removed if the run made them
     "session_validator": "",  # a copy of this repository's scripts/validate_session.py, relative to this settings file
     # the optional AI adviser (unity_playtest.py --adviser): it answers the bot's questions with Claude
     "adviser_model": "claude-opus-5-5",

@@ -315,7 +315,11 @@ def main() -> int:
                 print("left alone (changed during the run, not by the editor): " + path)
     for pattern in settings["leftovers"]:
         for leftover in project.glob(pattern):
-            if leftover not in leftovers_before and leftover.is_file():
+            if leftover in leftovers_before:
+                continue
+            if leftover.is_dir():
+                shutil.rmtree(leftover)
+            elif leftover.is_file():
                 leftover.unlink()
     if dump.exists() and not had_dump:
         dump.unlink()
