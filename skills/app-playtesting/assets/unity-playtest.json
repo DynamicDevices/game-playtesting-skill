@@ -1,0 +1,26 @@
+{
+  "app": "Fill in the game's name",
+  "company": "Fill in Unity's Company Name",
+  "product": "Fill in Unity's Product Name",
+  "save_folder": "",
+  "run_folder": "Logs/Playtest",
+  "test_filter": "PlaytestBot",
+  "max_minutes": 0,
+  "start_scenes": [],
+  "milestone_text": "Complete",
+  "hud_menus": [],
+  "known_issues": "",
+  "catalogue": "",
+  "leftovers": [
+    "Assets/InitTestScene*"
+  ],
+  "adviser_model": "claude-opus-5-5",
+  "adviser_effort": "low",
+  "adviser_max_questions": 60,
+  "adviser_keychain_service": "",
+  "adviser_keychain_account": "",
+  "adviser_notes": "",
+  "session_validator": "",
+  "adviser_remember": false,
+  "adviser_never_offer": []
+}
