@@ -75,6 +75,29 @@ def redact(text: str) -> str:
     return KEY_SHAPE.sub("[key removed]", str(text))
 
 
+def explain(error: Exception) -> str:
+    """Why a question could not be answered, in words someone can act on. Never contains a key."""
+    if "Could not resolve authentication method" in str(error):
+        return "no API key was found: set ANTHROPIC_API_KEY, or name a Keychain item in the settings"
+    try:
+        import anthropic
+    except ImportError:
+        return redact(type(error).__name__ + ": " + str(error))[:300]
+    if isinstance(error, anthropic.AuthenticationError):
+        return "the API key was refused (401): check it is complete and still active"
+    if isinstance(error, anthropic.PermissionDeniedError):
+        return "the API key is not allowed to use this model (403)"
+    if isinstance(error, anthropic.NotFoundError):
+        return "the model named in adviser_model was not found (404)"
+    if isinstance(error, anthropic.RateLimitError):
+        return "the API's rate limit was reached (429)"
+    if isinstance(error, anthropic.APIStatusError):
+        return "the API returned an error (%d): %s" % (error.status_code, redact(str(error))[:200])
+    if isinstance(error, anthropic.APIConnectionError):
+        return "the API could not be reached: check the network connection"
+    return redact(type(error).__name__ + ": " + str(error))[:300]
+
+
 def keychain_key(service: str, account: str):
     """The password of a macOS Keychain item, or None. It is returned to the caller and goes nowhere else."""
     if sys.platform != "darwin" or not service:
@@ -226,7 +249,7 @@ def main() -> int:
                 try:
                     answer, tokens_in, tokens_out = fake_answer(ask) if client is None else ask_claude(client, settings, ask, folder, history)
                 except Exception as error:  # the bot must get an answer whatever went wrong, so it can carry on by its rules
-                    answer = {"choice": "", "why": "", "avoid": [], "finding": "", "error": redact(type(error).__name__ + ": " + str(error))[:300]}
+                    answer = {"choice": "", "why": "", "avoid": [], "finding": "", "error": explain(error)}
                 chosen = next((o for o in options if o["id"] == answer["choice"]), None)
                 if chosen and not answer["error"]:
                     memory[signature(ask)] = {"option": chosen["kind"] + ":" + chosen["label"], "answer": dict(answer, choice="")}
