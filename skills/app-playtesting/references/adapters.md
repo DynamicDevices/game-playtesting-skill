@@ -12,6 +12,13 @@ capture, finite batches, contact release, recording and the fallback ladder.
 App-specific skills link to them instead of keeping copies; calibrated app data
 belongs in the app profile. No separate setup procedure is maintained here.
 
+## Unity game in the editor
+
+For a developer-authorised Unity project, a play-mode bot can play inside the
+editor with no window or screen control. Use [the Unity in-editor adapter](unity-in-editor.md)
+for run questions, checkpoints, stop conditions, stall diagnosis and session
+records. It was used live on one game on macOS only.
+
 ## Browser, desktop and iOS
 
 For a browser use the available authorised browser controller. Prefer roles,
