@@ -21,5 +21,6 @@
   "adviser_keychain_account": "",
   "adviser_notes": "",
   "session_validator": "",
-  "adviser_remember": false
+  "adviser_remember": false,
+  "adviser_never_offer": []
 }

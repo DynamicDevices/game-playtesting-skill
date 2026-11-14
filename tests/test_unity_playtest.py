@@ -165,6 +165,25 @@ class AdviserTests(unittest.TestCase):
             self.assertIn("[key removed]", written)
 
 
+    def test_ruled_out_options_never_reach_the_model_or_the_answer(self):
+        with tempfile.TemporaryDirectory() as base:
+            folder = Path(base) / "playthrough-x"
+            folder.mkdir()
+            settings = Path(base) / "unity-playtest.json"
+            settings.write_text(json.dumps({"adviser_never_offer": ["buy .*\\d", "^accept all$"]}), encoding="utf-8")
+            options = [{"id": "menu:buy", "kind": "menu", "label": "Buy 500 gems for 4.99", "detail": ""},
+                       {"id": "menu:leave", "kind": "menu", "label": "Leave the shop", "detail": ""}]
+            (folder / "ask-0001.json").write_text(json.dumps({"id": 1, "reason": "a menu", "options": options}), encoding="utf-8")
+            (folder / "ask-0002.json").write_text(json.dumps({"id": 2, "reason": "a form", "options": [
+                {"id": "menu:all", "kind": "menu", "label": "Accept all", "detail": ""}]}), encoding="utf-8")
+            env = dict(os.environ, PLAYTEST_ADVISER_FAKE="menu:buy")
+            done = python(SCRIPTS / "unity_playtest_adviser.py", folder, "--once", "--settings", settings, cwd=base, env=env)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(json.loads((folder / "answer-0001.json").read_text(encoding="utf-8"))["choice"], "menu:leave")
+            self.assertIn("ruled out", json.loads((folder / "answer-0002.json").read_text(encoding="utf-8"))["error"])
+            self.assertIn("1 option(s) held back", (folder / "adviser.log").read_text(encoding="utf-8"))
+
+
 class SettingsTests(unittest.TestCase):
     def test_unknown_setting_is_refused(self):
         with tempfile.TemporaryDirectory() as folder:

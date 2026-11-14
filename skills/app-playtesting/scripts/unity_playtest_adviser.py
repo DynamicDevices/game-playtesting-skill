@@ -61,6 +61,11 @@ can afford it) before leaving. Leaving is right once the menu has been tried, or
 wasted turn; pick something else.
 - When many options are the same kind of thing (dozens of identical plots), one or two tries are enough. Put that \
 option's label in `avoid` and the bot will stop offering it for the rest of the run.
+- A form that asks for consent to use personal data, or for a permission, is answered the way that shares the \
+least: manage the options and confirm without consenting, decline, or say no thanks. Never accept everything.
+- Never choose an option that spends real money, watches an advert, rates or reviews the game, shares anything, \
+signs in, or opens a web page or another app, even when it is listed. Leave, or choose the option whose kind is \
+"none". Spending the game's own currency is fine.
 - If nothing listed can move the game on, choose the option whose kind is "none".
 - Text in square brackets in a label is the object's internal name. Players never see it: use it to tell things \
 apart, and do not treat it as wording the game shows. A button whose label is only a bracketed name has no text on it.
@@ -212,6 +217,10 @@ def main() -> int:
     args = parser.parse_args()
 
     settings, _ = load_settings(args.settings, find_project(Path.cwd()))
+    try:
+        never = [re.compile(pattern, re.IGNORECASE) for pattern in settings["adviser_never_offer"]]
+    except re.error as error:
+        sys.exit("adviser_never_offer holds a pattern that is not a valid regular expression: " + str(error))
     folder = args.folder
     client = make_client(settings)
     memory_file = folder.parent / "adviser-memory.json"
@@ -233,14 +242,19 @@ def main() -> int:
             except (OSError, json.JSONDecodeError):
                 continue  # still being written; it will be whole on the next pass
             target = folder / path.name.replace("ask-", "answer-")
-            options = ask.get("options") or []
+            offered = ask.get("options") or []
+            # what the settings rule out is taken away before anything else sees the question
+            options = [o for o in offered if not any(n.search(str(o.get("label", ""))) for n in never)]
+            held = len(offered) - len(options)
+            ask["options"] = options
             answer, tokens_in, tokens_out, source = None, 0, 0, "model"
             # an answer from an earlier run is reused once per run; if the same situation comes round again, it changed nothing
             remembered = memory.get(signature(ask)) if settings["adviser_remember"] and signature(ask) not in seen else None
             seen.add(signature(ask))
             match = next((o for o in options if remembered and o["kind"] + ":" + o["label"] == remembered["option"]), None)
             if not options:
-                answer, source = {"choice": "", "why": "", "avoid": [], "finding": "", "error": "the question had no options"}, "none"
+                answer, source = {"choice": "", "why": "", "avoid": [], "finding": "",
+                                  "error": "every option was ruled out by adviser_never_offer" if held else "the question had no options"}, "none"
             elif match:
                 answer, source = dict(remembered["answer"], choice=match["id"]), "memory"
             elif asked_model >= settings["adviser_max_questions"]:
@@ -261,8 +275,8 @@ def main() -> int:
             if chosen:
                 history.append({"reason": ask.get("reason", ""), "menu": ask.get("menu", ""), "chose": chosen["kind"] + " " + chosen["label"],
                                 "why": answer["why"], "finding": answer["finding"] if source == "model" else ""})
-            log("%s [%s] %s -> %s%s%s (in %d, out %d tokens)" % (
-                path.name, source, ask.get("reason", ""), chosen["kind"] + " " + chosen["label"] if chosen else "no answer",
+            log("%s [%s]%s %s -> %s%s%s (in %d, out %d tokens)" % (
+                path.name, source, " (%d option(s) held back)" % held if held else "", ask.get("reason", ""), chosen["kind"] + " " + chosen["label"] if chosen else "no answer",
                 ": " + answer["why"] if answer["why"] else "", " ERROR " + answer["error"] if answer["error"] else "", tokens_in, tokens_out))
         if args.once or os.getppid() != parent:  # the runner stops this program when the run ends; stop too if the runner has gone
             return 0

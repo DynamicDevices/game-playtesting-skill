@@ -114,6 +114,12 @@ raises one, `FINDING`.
 - The adviser can only choose from options the bot lists, so it cannot set game
   state or skip a step. A `FINDING` is a model's reading of one situation, not
   an observation: check it in the log before reporting it.
+- `adviser_never_offer` in the settings is a list of patterns: an option whose
+  label matches one is taken out before the model sees the question and can
+  never be chosen. List real-money purchases, adverts, sign-ins, sharing and a
+  consent form's "accept all" for any game that has them. The model is also told
+  to answer consent forms the way that shares the least, but a pattern is the
+  guarantee.
 - This sends game text and screenshots to a third party and spends money on the
   key's account. Use it only with the developer's agreement. Without
   `--adviser` nothing leaves the computer.
