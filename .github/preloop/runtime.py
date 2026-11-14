@@ -97,9 +97,17 @@ def commit_status(github, binding, head, state, run_url, description):
     # exact-commit endpoint and independently check the newest matching record.
     combined = github(root + '/commits/' + head + '/status')
     current = next((row for row in combined['statuses'] if row['context'] == 'Preloop review'), None)
+    # Combined statuses omit creator. The list endpoint retains actor identity;
+    # join both independently read records by the ID returned by this write.
+    statuses = github(root + '/commits/' + head + '/statuses?per_page=100')
+    require(type(statuses) is list, 'Malformed commit status list')
+    observed = next((row for row in statuses if row.get('context') == 'Preloop review'), None)
     require(combined['sha'] == head and current and current['id'] == status['id'] and
             current['state'] == state and current['target_url'] == run_url and
-            current['creator']['login'] == 'github-actions[bot]', 'Commit status readback mismatch')
+            observed and observed.get('id') == status['id'] and
+            observed.get('state') == state and observed.get('target_url') == run_url and
+            type(observed.get('creator')) is dict and
+            observed['creator'].get('login') == 'github-actions[bot]', 'Commit status readback mismatch')
     return status
 
 

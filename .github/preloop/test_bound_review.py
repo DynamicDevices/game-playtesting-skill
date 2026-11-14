@@ -19,7 +19,7 @@ class BoundReviewTests(unittest.TestCase):
         self.execution = dict(self.intent, id=self.eid, status="SUCCEEDED", startup_receipt={
             "version": 1, "executor": "hosted", "checkout_verified": True,
             "setup_completed": True, "commit": "a" * 40,
-            "agent_started_at": "2026-11-13T15:00:00Z"})
+            "agent_started_at": "2026-11-13T15:00:00Z", "lease_revoked": True})
         self.completion = dict(self.intent, execution_id=self.eid, status="SUCCEEDED",
                                event_id="73db8ab4-33db-4359-a135-9f20edc61ff8",
                                result_ready=True, result_sha256=canonical_digest(self.result))
@@ -72,10 +72,17 @@ class BoundReviewTests(unittest.TestCase):
             with self.assertRaises(InvalidReview):
                 self.check()
 
-    def test_revoked_native_lease_never_passes(self):
-        self.execution['startup_receipt']['lease_revoked'] = '2026-11-13T15:01:00Z'
-        with self.assertRaises(InvalidReview):
-            self.check()
+    def test_terminal_requires_confirmed_lease_revocation(self):
+        for value in [None, False, 1, '2026-11-13T15:01:00Z']:
+            with self.subTest(value=value):
+                self.execution['startup_receipt']['lease_revoked'] = value
+                with self.assertRaises(InvalidReview):
+                    self.check()
+
+    def test_completed_startup_receipt_accepts_documented_cleanup(self):
+        self.execution['startup_receipt']['lease_revoked'] = True
+        self.execution['startup_receipt']['agent_cli'] = {'name': 'codex', 'version': '0.153.4'}
+        self.assertEqual(self.check()['state'], 'success')
 
     def test_failed_execution_preserves_blocking_findings_without_green(self):
         self.result.update(success=False, verdict="changes_requested", findings=[dict(

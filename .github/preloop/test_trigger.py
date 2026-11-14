@@ -182,6 +182,24 @@ class TriggerTests(unittest.TestCase):
                     trigger.startup()
                 (Path(self.temp.name) / 'preloop-startup/receipt.json').unlink()
 
+    def test_completed_startup_requires_confirmed_cleanup(self):
+        self.store_receipt()
+        self.detail['status'] = 'SUCCEEDED'
+        for value in [None, False, 1]:
+            with self.subTest(value=value):
+                self.detail['startup_receipt']['lease_revoked'] = value
+                with self.assertRaises(InvalidReview):
+                    trigger.startup()
+                (Path(self.temp.name) / 'preloop-startup/receipt.json').unlink()
+        self.detail['startup_receipt']['lease_revoked'] = True
+        trigger.startup()
+
+    def test_running_startup_rejects_already_revoked_lease(self):
+        self.store_receipt()
+        self.detail['startup_receipt']['lease_revoked'] = True
+        with self.assertRaises(InvalidReview):
+            trigger.startup()
+
 
 if __name__ == '__main__':
     unittest.main()

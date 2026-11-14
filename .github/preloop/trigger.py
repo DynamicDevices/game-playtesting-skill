@@ -95,7 +95,8 @@ def startup():
             'Native workload is queued or failed, not a verified running launch')
     require(type(startup) is dict, 'Malformed native startup receipt')
     require(startup.get('version') == 1 and startup.get('executor') == 'hosted' and
-            startup.get('lease_revoked') is None and
+            ((detail['status'] == 'RUNNING' and startup.get('lease_revoked') is None) or
+             (detail['status'] == 'SUCCEEDED' and startup.get('lease_revoked') is True)) and
             startup.get('commit') == receipt['head_sha'] and
             startup.get('checkout_verified') is True and startup.get('setup_completed') is True and
             type(startup.get('agent_started_at')) is str and startup['agent_started_at'],

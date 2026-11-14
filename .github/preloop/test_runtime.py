@@ -21,27 +21,47 @@ class RuntimeTests(unittest.TestCase):
         calls = []
         def github(path, method='GET', body=None):
             calls.append((path, method))
-            return status if method == 'POST' else {'sha': 'a' * 40, 'statuses': [status]}
+            if method == 'POST':
+                return status
+            if path.endswith('/statuses?per_page=100'):
+                return [status]
+            combined_status = {key: value for key, value in status.items() if key != 'creator'}
+            return {'sha': 'a' * 40, 'statuses': [combined_status]}
         with patch.dict(os.environ, GITHUB_RUN_ID='12'):
             self.assertEqual(runtime.commit_status(github, self.binding, 'a' * 40, 'success', status['target_url'], 'Reviewed')['id'], 9)
-        self.assertEqual(len(calls), 2)
-        self.assertTrue(calls[-1][0].endswith('/status'))
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(calls[-1][0].endswith('/statuses?per_page=100'))
 
     def test_status_readback_rejects_wrong_actor_state_or_commit(self):
         for field, value in [('sha', 'b' * 40), ('state', 'pending'), ('actor', 'someone')]:
             status = dict(id=9, context='Preloop review', state='success', target_url='https://github.com/example/repository/actions/runs/12',
                           creator={'login': 'github-actions[bot]'})
-            combined = {'sha': 'a' * 40, 'statuses': [dict(status)]}
+            combined = {'sha': 'a' * 40, 'statuses': [{key: value for key, value in status.items() if key != 'creator'}]}
+            observed = [dict(status)]
             if field == 'sha':
                 combined['sha'] = value
             elif field == 'actor':
-                combined['statuses'][0]['creator'] = {'login': value}
+                observed[0]['creator'] = {'login': value}
             else:
                 combined['statuses'][0][field] = value
             with patch.dict(os.environ, GITHUB_RUN_ID='12'):
                 with self.assertRaises(InvalidReview):
-                    runtime.commit_status(lambda _p, method='GET', body=None: status if method == 'POST' else combined,
+                    runtime.commit_status(lambda _p, method='GET', body=None: status if method == 'POST' else
+                                          (observed if _p.endswith('/statuses?per_page=100') else combined),
                                           self.binding, 'a' * 40, 'success', status['target_url'], 'Reviewed')
+
+    def test_status_readback_rejects_missing_actor_and_mismatched_list_record(self):
+        for field, value in [('creator', None), ('id', 10), ('state', 'pending'), ('target_url', 'https://example.invalid')]:
+            status = dict(id=9, context='Preloop review', state='success',
+                          target_url='https://github.com/example/repository/actions/runs/12')
+            listed = dict(status, creator={'login': 'github-actions[bot]'})
+            listed[field] = value
+            combined = {'sha': 'a' * 40, 'statuses': [status]}
+            def github(path, method='GET', body=None):
+                return status if method == 'POST' else ([listed] if path.endswith('/statuses?per_page=100') else combined)
+            with patch.dict(os.environ, GITHUB_RUN_ID='12'):
+                with self.assertRaises(InvalidReview):
+                    runtime.commit_status(github, self.binding, 'a' * 40, 'success', status['target_url'], 'Reviewed')
 
     def test_pull_request_target_revision_is_trusted_base(self):
         run = dict(event='pull_request_target', head_sha='b' * 40, repository={'id': 42})
