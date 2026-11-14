@@ -38,7 +38,7 @@ class RunnerTests(unittest.TestCase):
         (self.project / "unity-playtest.json").write_text(json.dumps({
             "app": "Synthetic Game", "save_folder": str(self.saves), "start_scenes": ["Loader"],
             "known_issues": "known-issues.txt", "max_minutes": 40,
-            "session_validator": str(ROOT / "scripts" / "validate_session.py")}), encoding="utf-8")
+            "session_validator": str(ROOT / "scripts" / "validate_session.py"), "adviser_remember": True}), encoding="utf-8")
         (self.project / ".gitignore").write_text("Logs/\n", encoding="utf-8")
         identity = ["-c", "user.name=Offline Test", "-c", "user.email=offline@example.invalid", "-c", "commit.gpgsign=false"]
         for command in (["init", "-q"], ["add", "-A"], [*identity, "commit", "-q", "-m", "synthetic project"]):
@@ -188,6 +188,25 @@ class AdviserTests(unittest.TestCase):
             written = (folder / "adviser.log").read_text(encoding="utf-8")
             self.assertNotIn("sk-ant-abcdefghijklmnop", written)
             self.assertIn("[key removed]", written)
+
+
+    def test_ruled_out_options_never_reach_the_model_or_the_answer(self):
+        with tempfile.TemporaryDirectory() as base:
+            folder = Path(base) / "playthrough-x"
+            folder.mkdir()
+            settings = Path(base) / "unity-playtest.json"
+            settings.write_text(json.dumps({"adviser_never_offer": ["buy .*\\d", "^accept all$"]}), encoding="utf-8")
+            options = [{"id": "menu:buy", "kind": "menu", "label": "Buy 500 gems for 4.99", "detail": ""},
+                       {"id": "menu:leave", "kind": "menu", "label": "Leave the shop", "detail": ""}]
+            (folder / "ask-0001.json").write_text(json.dumps({"id": 1, "reason": "a menu", "options": options}), encoding="utf-8")
+            (folder / "ask-0002.json").write_text(json.dumps({"id": 2, "reason": "a form", "options": [
+                {"id": "menu:all", "kind": "menu", "label": "Accept all", "detail": ""}]}), encoding="utf-8")
+            env = dict(os.environ, PLAYTEST_ADVISER_FAKE="menu:buy")
+            done = python(SCRIPTS / "unity_playtest_adviser.py", folder, "--once", "--settings", settings, cwd=base, env=env)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(json.loads((folder / "answer-0001.json").read_text(encoding="utf-8"))["choice"], "menu:leave")
+            self.assertIn("ruled out", json.loads((folder / "answer-0002.json").read_text(encoding="utf-8"))["error"])
+            self.assertIn("1 option(s) held back", (folder / "adviser.log").read_text(encoding="utf-8"))
 
 
 class SettingsTests(unittest.TestCase):

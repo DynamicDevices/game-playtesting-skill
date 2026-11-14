@@ -114,6 +114,12 @@ raises one, `FINDING`.
 - The adviser can only choose from options the bot lists, so it cannot set game
   state or skip a step. A `FINDING` is a model's reading of one situation, not
   an observation: check it in the log before reporting it.
+- `adviser_never_offer` in the settings is a list of patterns: an option whose
+  label matches one is taken out before the model sees the question and can
+  never be chosen. List real-money purchases, adverts, sign-ins, sharing and a
+  consent form's "accept all" for any game that has them. The model is also told
+  to answer consent forms the way that shares the least, but a pattern is the
+  guarantee.
 - This sends game text and screenshots to a third party and spends money on the
   key's account. Use it only with the developer's agreement. Without
   `--adviser` nothing leaves the computer.
@@ -128,10 +134,11 @@ raises one, `FINDING`.
   refuses the request rather than silently using another credential/account.
   That selected item's key is sent only to Anthropic's fixed API origin, not an
   endpoint selected by an environment override.
-- Answers are kept in `adviser-memory.json` beside the runs and reused once per
-  run for the same situation, so a repeat run costs less. Delete the file to
-  ask afresh. Runs with an adviser are less repeatable than runs by rules alone;
-  use rules alone for regression checks.
+- Runs with an adviser are less repeatable than runs by rules alone; use rules
+  alone for regression checks. With `adviser_remember` on, answers are kept in
+  `adviser-memory.json` beside the runs and reused once per run for the same
+  situation: cheaper, but runs from the same saved game then make the same
+  choices. It is off by default, so each run can try something new.
 
 In this general form the scripts have been run live on one game on macOS with
 Plastic SCM: the runner, report and coverage on several runs, and the adviser on
