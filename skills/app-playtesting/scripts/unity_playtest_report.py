@@ -81,6 +81,8 @@ def summarise(path: Path, settings: dict, known: list):
         "stuck": Counter(m.group(1) for m in stuck if not m.group(2)),
         "no_route": Counter(m.group(1) + " (" + m.group(2) + ")" for m in stuck if m.group(2)),
         "chosen": [(t, text) for t, tag, text in events if tag == "CHOOSE"],
+        "told": [(t, text) for t, tag, text in events if tag == "TOLD"],
+        "findings": [(t, text) for t, tag, text in events if tag == "FINDING"],
         "setup": next((text for _, tag, text in events if tag == "SETUP"), ""),
         "goal_notes": [text for _, tag, text in events if tag == "GOAL" and text.startswith("nothing usable")],
         "done": next((text for _, tag, text in events if tag == "DONE"), ""),
@@ -217,6 +219,9 @@ def main() -> int:
     block("Objectives nothing matched", f["goal_notes"])
     block("Used (%d)" % len(f["used"]), ["%dx %s" % (n, name) for name, n in Counter(f["used"]).most_common(15)])
     block("Answers chosen", ["%.0f s  %s" % (t, text) for t, text in f["chosen"]])
+    block("Advice from the adviser (%d questions)" % len(f["told"]), ["%.0f s  %s" % (t, text) for t, text in f["told"]])
+    block("Findings the adviser raised (a model's reading of the situation: check each before reporting it)",
+          ["%.0f s  %s" % (t, text) for t, text in f["findings"]])
     block("No walkable route to (%d tries)" % sum(f["no_route"].values()), ["%dx %s" % (n, name) for name, n in f["no_route"].most_common(10)])
     block("Stopped moving on the way to (%d tries)" % sum(f["stuck"].values()), ["%dx %s" % (n, name) for name, n in f["stuck"].most_common(10)])
     block("Sequences still running at the end", f["still_running"])

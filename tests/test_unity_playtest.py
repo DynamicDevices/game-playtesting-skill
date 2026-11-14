@@ -37,7 +37,8 @@ class RunnerTests(unittest.TestCase):
         (self.project / "known-issues.txt").write_text("# errors that don't fail a report\nold error\n", encoding="utf-8")
         (self.project / "unity-playtest.json").write_text(json.dumps({
             "app": "Synthetic Game", "save_folder": str(self.saves), "start_scenes": ["Loader"],
-            "known_issues": "known-issues.txt", "max_minutes": 40}), encoding="utf-8")
+            "known_issues": "known-issues.txt", "max_minutes": 40,
+            "session_validator": str(ROOT / "scripts" / "validate_session.py")}), encoding="utf-8")
         (self.project / ".gitignore").write_text("Logs/\n", encoding="utf-8")
         identity = ["-c", "user.name=Offline Test", "-c", "user.email=offline@example.invalid", "-c", "commit.gpgsign=false"]
         for command in (["init", "-q"], ["add", "-A"], [*identity, "commit", "-q", "-m", "synthetic project"]):
@@ -63,6 +64,7 @@ class RunnerTests(unittest.TestCase):
         done = self.run_bot("first", "--fresh", "--until", "TutorialComplete = True", "--save-checkpoint", "after-tutorial")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("Result: OK", done.stdout)
+        self.assertIn("session record is valid", done.stdout)
         # the editor's rewrite is undone; a person's edit and the checked-in state are respected
         self.assertEqual((self.project / "Assets" / "Thing.mat").read_text(encoding="utf-8"), "as checked in\n")
         self.assertIn("edited by a person", (self.project / "Assets" / "Bot.cs").read_text(encoding="utf-8"))
@@ -114,6 +116,24 @@ class RunnerTests(unittest.TestCase):
             self.assertFalse(self.saves.exists(), options)
         self.assertNotEqual(self.run_bot("no spaces allowed").returncode, 0)
 
+    def test_the_bot_can_ask_an_adviser(self):
+        # a stand-in answers (PLAYTEST_ADVISER_FAKE); no model is called and nothing leaves the computer
+        os.environ["PLAYTEST_ADVISER_FAKE"] = "press:Plant"
+        try:
+            done = self.run_bot("asks", "--fresh", "--adviser")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            folder = self.run_folder("asks")
+            self.assertIn("TOLD   press:Plant", (folder / "playthrough.txt").read_text(encoding="utf-8"))
+            self.assertIn("press Plant", (folder / "adviser.log").read_text(encoding="utf-8"))
+            # the answer is remembered, and a later run in the same situation is answered from memory
+            self.assertEqual(self.run_bot("again", "--adviser").returncode, 0)
+            self.assertIn("[memory]", (self.run_folder("again") / "adviser.log").read_text(encoding="utf-8"))
+        finally:
+            del os.environ["PLAYTEST_ADVISER_FAKE"]
+        # without --adviser the bot is not told to ask
+        self.assertEqual(self.run_bot("quiet").returncode, 0)
+        self.assertFalse((self.run_folder("quiet") / "ask-0001.json").exists())
+
     def test_coverage_adds_runs_up(self):
         self.assertEqual(self.run_bot("first", "--fresh").returncode, 0)
         (self.project / "sequences.txt").write_text("Village | Village | OpenDoor\nVillage | Village | CloseDoor\n", encoding="utf-8")
@@ -125,6 +145,24 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("Scripted sequences started: 1 of 2", done.stdout)
         self.assertIn("1 used, 1 on but never used", done.stdout)
         self.assertIn("Read (Sign) at 9,9: no walkable route to it", done.stdout)
+
+
+class AdviserTests(unittest.TestCase):
+    def test_an_answer_is_always_written_and_no_key_is_logged(self):
+        with tempfile.TemporaryDirectory() as base:
+            folder = Path(base) / "playthrough-x"
+            folder.mkdir()
+            (folder / "ask-0001.json").write_text(json.dumps({"id": 1, "reason": "nothing to do", "options": []}), encoding="utf-8")
+            (folder / "ask-0002.json").write_text(json.dumps({"id": 2, "reason": "sk-ant-abcdefghijklmnop", "scene": "S",
+                                                              "options": [{"id": "use:1", "kind": "use", "label": "Door", "detail": ""}]}), encoding="utf-8")
+            env = dict(os.environ, PLAYTEST_ADVISER_FAKE="1")
+            done = python(SCRIPTS / "unity_playtest_adviser.py", folder, "--once", cwd=base, env=env)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertIn("no options", json.loads((folder / "answer-0001.json").read_text(encoding="utf-8"))["error"])
+            self.assertEqual(json.loads((folder / "answer-0002.json").read_text(encoding="utf-8"))["choice"], "use:1")
+            written = (folder / "adviser.log").read_text(encoding="utf-8")
+            self.assertNotIn("sk-ant-abcdefghijklmnop", written)
+            self.assertIn("[key removed]", written)
 
 
 class SettingsTests(unittest.TestCase):

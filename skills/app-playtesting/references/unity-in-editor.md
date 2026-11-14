@@ -60,7 +60,7 @@ by itself when nothing new has happened for several minutes.
 
 ## The scripts and what the bot must do
 
-Three scripts in `scripts/` do the parts that are the same for every game. They
+Four scripts in `scripts/` do the parts that are the same for every game. They
 need Python 3.9+, and the Unity command line or the editor program.
 
 - `unity_playtest.py LABEL [--until TEXT] [--fresh | --from-checkpoint NAME] [--save-checkpoint NAME]`
@@ -69,6 +69,8 @@ need Python 3.9+, and the Unity command line or the editor program.
 - `unity_playtest_report.py RUN [--expect TEXT]` turns a play log into the
   report, the exit code and a session record.
 - `unity_playtest_coverage.py` adds runs up into what has and hasn't been tried.
+- `unity_playtest_adviser.py` answers the bot's questions with Claude (optional;
+  see below).
 
 The game's details go in one settings file, `unity-playtest.json`, in the
 project folder (or `--settings`). Start from [the template](../assets/unity-playtest.json):
@@ -91,11 +93,38 @@ Tags the report understands, all optional: `SETUP` (the bot's settings),
 `SCENE now <name>`, `VAR`, `OBJ`, `USE`, `SAY`, `PICK`, `CHOOSE`, `RATE`,
 `INV+`/`INV-`, `BEGIN`/`END` (a scripted sequence), `MENU <name> is open`,
 `MENU+`, `MENU-`, `LEAVE <name>`, `GOAL nothing usable matches`, `STUCK short of <name> by <n>m`,
-`STALL?`, `PAUSE`, `ERROR` and `DONE <why the run ended>`. Sections after the
+`STALL?`, `PAUSE`, `ERROR`, `ASK`, `TOLD`, `FINDING` and `DONE <why the run ended>`. Sections after the
 events start with `=== `: `FINAL VARIABLES`, `HOTSPOTS` (one line per
 interactive thing: `used N` or `never`, `on` or `off`, label, object name,
 place, and why it could not be reached, separated by ` | `) and `ERRORS`
 (`3x <text>`).
+
+## Asking Claude when the rules run out
+
+Fixed rules cannot tell that a hundred garden plots are one kind of thing, or
+what an objective means when nothing has that name. With `--adviser` the bot may
+ask. It writes the situation to `ask-NNNN.json` in the run's folder (why it is
+asking, the objectives, the on-screen text, what is carried, recent log lines,
+and the options: each a thing a player could do) and waits for
+`answer-NNNN.json`. `unity_playtest_adviser.py` sends the question, and the
+screenshot when there is one, to the Claude API and writes back one of the
+listed options with a reason. The bot logs `ASK`, `TOLD` and, when the model
+raises one, `FINDING`.
+
+- The adviser can only choose from options the bot lists, so it cannot set game
+  state or skip a step. A `FINDING` is a model's reading of one situation, not
+  an observation: check it in the log before reporting it.
+- This sends game text and screenshots to a third party and spends money on the
+  key's account. Use it only with the developer's agreement. Without
+  `--adviser` nothing leaves the computer.
+- It needs `pip install anthropic`. The key is found as the SDK finds it, or on
+  macOS from a Keychain item named in the settings; it is never written or
+  logged. The settings also choose the model, how hard it thinks, a limit on
+  questions per run, and a few sentences about the game.
+- Answers are kept in `adviser-memory.json` beside the runs and reused once per
+  run for the same situation, so a repeat run costs less. Delete the file to
+  ask afresh. Runs with an adviser are less repeatable than runs by rules alone;
+  use rules alone for regression checks.
 
 The scripts were run live as part of one game's own skill before being made
 general. In this general form they have been run only against a stand-in editor

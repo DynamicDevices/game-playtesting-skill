@@ -18,8 +18,13 @@ What this does, in order:
   6. prints the report; each --until text is also checked, so the exit code is the verdict
   7. with --save-checkpoint, keeps the saved game under that name, but only if the report was clean
 
+With --adviser the bot may ask Claude what to do when its rules run out. That sends each question (text, and a
+screenshot when there is one) to the Claude API and costs money; see unity_playtest_adviser.py. Without it nothing
+leaves the computer.
+
 Nothing is deleted: a save that is replaced is kept as a checkpoint called "aside-<date>-<label>". This script
-drives a local developer project only. It does not install anything, change security settings or contact a network.
+drives a local developer project only. It does not install anything or change security settings, and without
+--adviser it does not contact a network.
 Run live on macOS with Plastic SCM; the git path is covered by an offline test with a stand-in editor only.
 """
 import argparse
@@ -32,7 +37,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from unity_playtest_common import find_project, load_settings  # noqa: E402
+from unity_playtest_common import beside, find_project, load_settings  # noqa: E402
 
 NAME = r"[A-Za-z0-9_-]+"
 HAND_WRITTEN = {".cs", ".asmdef", ".asmref", ".shader", ".hlsl", ".cginc", ".py", ".sh", ".md", ".txt", ".json", ".xml",
@@ -172,6 +177,8 @@ def main() -> int:
     parser.add_argument("--from-checkpoint", metavar="NAME", help="keep the saved game as a checkpoint and start from this one")
     parser.add_argument("--save-checkpoint", metavar="NAME", help="after a clean run, keep the saved game under this name")
     parser.add_argument("--list-checkpoints", action="store_true", help="list the checkpoints and stop")
+    parser.add_argument("--adviser", action="store_true",
+                        help="let the bot ask Claude when its rules run out (sends questions to the Claude API; costs money)")
     parser.add_argument("--no-report", action="store_true", help="don't print the report after the run")
     parser.add_argument("--project", type=Path, default=None, help="Unity project folder (default: found from the current folder)")
     parser.add_argument("--editor-path", default=None, help="run this Unity editor program instead of the Unity CLI")
@@ -248,6 +255,14 @@ def main() -> int:
         env["PLAYTEST_IDLE_MINUTES"] = str(args.idle_minutes)
     if args.minutes is not None:
         env["PLAYTEST_MINUTES"] = str(args.minutes)
+    adviser = None
+    if args.adviser:
+        env["PLAYTEST_ADVISER"] = "1"
+        answering = [sys.executable, "-B", str(Path(__file__).with_name("unity_playtest_adviser.py")), str(run_folder / ("playthrough-" + args.label))]
+        if settings_file:
+            answering += ["--settings", str(settings_file)]
+        adviser = subprocess.Popen(answering, cwd=project, env=env)
+        print("the bot may ask Claude (" + settings["adviser_model"] + ") up to %d questions; they are logged in adviser.log" % settings["adviser_max_questions"])
     if args.editor_path:
         command = [args.editor_path, "-batchmode", "-projectPath", str(project), "-runTests", "-testPlatform", "PlayMode",
                    "-testFilter", test_filter, "-testResults", str(results), "-logFile", str(editor_log)]
@@ -270,6 +285,11 @@ def main() -> int:
     except subprocess.TimeoutExpired:
         code = -1
         print("the run did not finish within the timeout")
+    finally:
+        if adviser is not None:
+            if adviser.poll() is not None and adviser.returncode != 0:
+                print("the adviser stopped early (exit code %d); the bot carried on by its rules" % adviser.returncode)
+            adviser.terminate()
     print("finished in %d s, exit code %d" % (time.time() - started, code))
 
     if editor_log.exists():
@@ -316,6 +336,12 @@ def main() -> int:
         for text in args.until:
             report += ["--expect", text]
         verdict = subprocess.run(report, cwd=project).returncode
+        # the validator checks the record's structure and evidence paths, not whether what it says is true
+        validator, record = beside(settings_file, settings["session_validator"]), play_log.with_name("session.json")
+        if validator and validator.is_file() and record.is_file():
+            checked = subprocess.run([sys.executable, "-I", "-B", str(validator), str(record)], capture_output=True, text=True)
+            print("session record " + ("is valid: " + checked.stdout.strip() if checked.returncode == 0
+                                       else "IS NOT VALID: " + (checked.stderr or checked.stdout).strip()))
     elif not play_log.exists() and test_filter == settings["test_filter"]:
         print("the bot wrote no play log, so there is nothing to report on")
         verdict = 1  # another test (--filter) has no play log and is judged by its own result

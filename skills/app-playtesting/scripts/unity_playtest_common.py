@@ -25,6 +25,14 @@ DEFAULTS = {
     "known_issues": "",     # a text file of error texts that don't fail a report, relative to this settings file
     "catalogue": "",        # a text file listing every scripted sequence ("group | scene | name"), for coverage
     "leftovers": ["Assets/InitTestScene*"],  # files a test run leaves in the project, removed if the run made them
+    "session_validator": "",  # a copy of this repository's scripts/validate_session.py, relative to this settings file
+    # the optional AI adviser (unity_playtest.py --adviser): it answers the bot's questions with Claude
+    "adviser_model": "claude-opus-5-5",
+    "adviser_effort": "low",          # low, medium, high: how hard the model thinks about each question
+    "adviser_max_questions": 60,      # the most questions sent to the model in one run
+    "adviser_keychain_service": "",   # macOS only: a Keychain item that holds the API key, instead of the environment
+    "adviser_keychain_account": "",
+    "adviser_notes": "",              # a few sentences about the game, added to what the model is told
 }
 SETTINGS_NAME = "unity-playtest.json"
 
