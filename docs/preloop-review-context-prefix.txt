@@ -1,0 +1,22 @@
+Native restricted-CI review target (controller-provided event fields):
+Repository: {{trigger_event.payload.repository.full_name}}
+Pull request number: {{trigger_event.payload.pull_request.number}}
+Expected head commit: {{trigger_event.payload.pull_request.head.sha}}
+Target branch: {{trigger_event.payload.pull_request.base.ref}}
+
+These fields identify the admitted target; they are not evidence that source was
+read. Locate the native checkout of this repository, verify its actual origin and
+HEAD against that target, and inspect the complete merge-base-to-head diff there.
+Determine base_sha from the merge base of the verified head and the fetched target
+branch, not from the target branch tip. Inspect relevant surrounding source.
+Report actual verified full commit IDs, never placeholder or all-zero IDs.
+Do not fetch another repository, execute repository code, install dependencies,
+change the checkout, or use a supplied source packet as a substitute for the native
+clone. The native checkout and its controller receipts remain mandatory.
+
+If a target field is missing or unresolved, the native checkout is inaccessible,
+the actual HEAD differs, the target/base is unavailable, or the full diff cannot
+be inspected through the available read-only tools, return an explicit error with
+success false and verdict error. Do not claim pass merely by repeating these
+target values, and do not invent source observations or tests.
+
