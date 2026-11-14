@@ -63,6 +63,37 @@ class RuntimeTests(unittest.TestCase):
                 with self.assertRaises(InvalidReview):
                     runtime.commit_status(github, self.binding, 'a' * 40, 'success', status['target_url'], 'Reviewed')
 
+    def test_status_mismatch_names_failed_gate_without_dumping_records_or_retry(self):
+        for changed, expected in [('commit', 'combined_commit'), ('combined_id', 'combined_status_id'),
+                                  ('combined_state', 'combined_state'), ('combined_url', 'combined_target_url'),
+                                  ('listed_id', 'listed_status_id'), ('listed_state', 'listed_state'),
+                                  ('listed_url', 'listed_target_url'), ('actor', 'listed_actor')]:
+            with self.subTest(changed=changed):
+                url = 'https://github.com/example/repository/actions/runs/12'
+                status = dict(id=9, context='Preloop review', state='success', target_url=url)
+                combined = {'sha': 'a' * 40, 'statuses': [dict(status)]}
+                listed = [dict(status, creator={'login': 'github-actions[bot]'})]
+                if changed == 'commit':
+                    combined['sha'] = 'b' * 40
+                elif changed == 'actor':
+                    listed[0]['creator'] = {'login': 'untrusted-sensitive-value'}
+                else:
+                    target, field = changed.split('_')
+                    row = combined['statuses'][0] if target == 'combined' else listed[0]
+                    row[{'id': 'id', 'state': 'state', 'url': 'target_url'}[field]] = (
+                        10 if field == 'id' else 'untrusted-sensitive-value')
+                calls = []
+                def github(path, method='GET', body=None):
+                    calls.append(method)
+                    return status if method == 'POST' else (
+                        listed if path.endswith('/statuses?per_page=100') else combined)
+                with patch.dict(os.environ, GITHUB_RUN_ID='12'):
+                    with self.assertRaises(InvalidReview) as caught:
+                        runtime.commit_status(github, self.binding, 'a' * 40, 'success', url, 'Reviewed')
+                self.assertEqual(str(caught.exception), 'Commit status readback mismatch: ' + expected)
+                self.assertEqual(calls, ['POST', 'GET', 'GET'])
+                self.assertNotIn('untrusted-sensitive-value', str(caught.exception))
+
     def test_pull_request_target_revision_is_trusted_base(self):
         run = dict(event='pull_request_target', head_sha='b' * 40, repository={'id': 42})
         self.assertEqual(trust.trigger_workflow_sha(run, {'workflow_sha': 'b' * 40}, self.binding, 'a' * 40), 'b' * 40)
