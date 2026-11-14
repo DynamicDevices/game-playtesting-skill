@@ -118,8 +118,10 @@ def make_client(settings: dict):
         import anthropic
     except ImportError:
         sys.exit("The adviser needs the Anthropic SDK: pip install anthropic")
-    key = keychain_key(settings["adviser_keychain_service"], settings["adviser_keychain_account"])
-    if key:
+    if settings["adviser_keychain_service"]:
+        key = keychain_key(settings["adviser_keychain_service"], settings["adviser_keychain_account"])
+        if not key:
+            raise ValueError("The configured Keychain item is unavailable; no other credential was used")
         # a key from the Keychain is an Anthropic API key, so it goes to Anthropic's own address whatever the environment says
         return anthropic.Anthropic(api_key=key, base_url="https://api.anthropic.com", timeout=90.0)
     return anthropic.Anthropic(timeout=90.0)
@@ -147,6 +149,23 @@ def signature(ask: dict) -> str:
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:24]
 
 
+def screenshot_bytes(folder: Path, name):
+    """Read only a PNG inside this run; question files cannot select other files."""
+    if not isinstance(name, str) or not name:
+        raise ValueError("Screenshot must name a PNG inside the run folder")
+    relative = Path(name)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("Screenshot must stay inside the run folder")
+    root = folder.resolve()
+    shot = (root / relative).resolve()
+    if not shot.is_relative_to(root) or shot.suffix.lower() != ".png" or not shot.is_file():
+        raise ValueError("Screenshot must name a PNG inside the run folder")
+    data = shot.read_bytes()
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("Screenshot is not a PNG")
+    return data
+
+
 def ask_claude(client, settings: dict, ask: dict, folder: Path, history: list):
     """Returns (answer dict, input tokens, output tokens)."""
     import anthropic
@@ -156,10 +175,10 @@ def ask_claude(client, settings: dict, ask: dict, folder: Path, history: list):
     situation["findings_already_raised"] = [item["finding"] for item in history if item.get("finding")]
     situation["options"] = options
     content = []
-    shot = folder / ask["screenshot"] if ask.get("screenshot") else None
-    if shot and shot.is_file() and shot.suffix.lower() == ".png":
+    if ask.get("screenshot"):
+        image = screenshot_bytes(folder, ask["screenshot"])
         content.append({"type": "image", "source": {"type": "base64", "media_type": "image/png",
-                                                    "data": base64.standard_b64encode(shot.read_bytes()).decode("utf-8")}})
+                                                    "data": base64.standard_b64encode(image).decode("utf-8")}})
     content.append({"type": "text", "text": json.dumps(situation, indent=1, ensure_ascii=False)})
     system = SYSTEM
     if settings["app"]:

@@ -117,10 +117,17 @@ raises one, `FINDING`.
 - This sends game text and screenshots to a third party and spends money on the
   key's account. Use it only with the developer's agreement. Without
   `--adviser` nothing leaves the computer.
+- Screenshot paths must name PNG files inside the current run folder. Absolute
+  paths, parent traversal, symlinks escaping that folder and non-PNG content are
+  rejected before the API request.
 - It needs `pip install anthropic`. The key is found as the SDK finds it, or on
   macOS from a Keychain item named in the settings; it is never written or
   logged. The settings also choose the model, how hard it thinks, a limit on
   questions per run, and a few sentences about the game.
+- A configured Keychain item must be available. If it cannot be read, the adviser
+  refuses the request rather than silently using another credential/account.
+  That selected item's key is sent only to Anthropic's fixed API origin, not an
+  endpoint selected by an environment override.
 - Answers are kept in `adviser-memory.json` beside the runs and reused once per
   run for the same situation, so a repeat run costs less. Delete the file to
   ask afresh. Runs with an adviser are less repeatable than runs by rules alone;
