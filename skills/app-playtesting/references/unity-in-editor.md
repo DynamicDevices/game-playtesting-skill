@@ -126,9 +126,10 @@ raises one, `FINDING`.
   ask afresh. Runs with an adviser are less repeatable than runs by rules alone;
   use rules alone for regression checks.
 
-The scripts were run live as part of one game's own skill before being made
-general. In this general form they have been run only against a stand-in editor
-and synthetic logs in this repository's offline tests.
+In this general form the scripts have been run live on one game on macOS with
+Plastic SCM: the runner, report and coverage on several runs, and the adviser on
+one 15-minute run (41 questions). The git tidy-up, Windows and Linux have only
+been run against a stand-in editor in this repository's offline tests.
 
 ## Checkpoints
 
