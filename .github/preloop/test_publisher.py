@@ -76,7 +76,10 @@ class PublisherTests(unittest.TestCase):
             self.statuses.insert(0, value)
             return value
         if path.endswith('/status'):
-            return {'sha': 'a' * 40, 'statuses': self.statuses}
+            return {'sha': 'a' * 40, 'statuses': [
+                {key: value for key, value in row.items() if key != 'creator'} for row in self.statuses]}
+        if path.endswith('/statuses?per_page=100'):
+            return self.statuses
         raise AssertionError('Unexpected fake API route: ' + path)
 
     def artifacts(self, _github, _binding, name, _workflow, **_kwargs):
