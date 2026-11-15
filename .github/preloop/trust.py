@@ -213,12 +213,32 @@ def download_trigger_artifact(repository, artifact_id, github_token):
     return receipt_from_zip(data)
 
 def trigger_workflow_sha(run, receipt, binding, head):
-    # pull_request_target executes the trusted BASE revision, not the PR head.
-    # This correction follows cursor-config PR306 at e82ebcb81255a4494c3bdefc1d96e2a0e45e62a2.
+    # REST run.head_sha is the PR head for pull_request_target, whereas OIDC
+    # workflow_sha and checkout identify the trusted base. Verify both identities.
     require(run['event'] in ['pull_request_target', 'workflow_dispatch'], 'Unexpected trigger event')
     require(run.get('repository', {}).get('id') == binding['repository_id'], 'Wrong trigger repository')
-    workflow_sha = run['head_sha']
-    require(re.fullmatch('[0-9a-f]{40}', workflow_sha) and
+    require(type(head) is str and re.fullmatch('[0-9a-f]{40}', head) and
+            receipt.get('head_sha') == head, 'Trigger review revision mismatch')
+    if run['event'] == 'pull_request_target':
+        prs = run.get('pull_requests')
+        require(type(prs) is list and len(prs) == 1 and type(prs[0]) is dict,
+                'Missing or ambiguous trigger PR provenance')
+        pr = prs[0]
+        base, source = pr.get('base', {}), pr.get('head', {})
+        require(type(base) is dict and type(source) is dict and
+                type(pr.get('number')) is int and pr['number'] > 0 and
+                pr['number'] == receipt.get('pr_number') and
+                base.get('ref') == binding['default_branch'] and
+                base.get('repo', {}).get('id') == binding['repository_id'] and
+                source.get('repo', {}).get('id') == binding['repository_id'] and
+                source.get('sha') == head and run.get('head_sha') == head and
+                base.get('sha') == receipt.get('base_sha'),
+                'Trigger PR head/base or repository mismatch')
+        workflow_sha = base.get('sha')
+    else:
+        require(run.get('head_branch') == binding['default_branch'], 'Untrusted manual trigger branch')
+        workflow_sha = run.get('head_sha')
+    require(type(workflow_sha) is str and re.fullmatch('[0-9a-f]{40}', workflow_sha) and
             receipt.get('workflow_sha') == workflow_sha,
             'Trigger workflow revision mismatch')
     return workflow_sha

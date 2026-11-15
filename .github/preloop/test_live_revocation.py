@@ -1,6 +1,9 @@
 """Online write-boundary suspension checks; no real API or credential use."""
 import copy
+import json
 import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -57,10 +60,44 @@ class LiveRevocationTests(unittest.TestCase):
             self.workflows[key]['state'] = 'active'
 
     def test_pr_target_uses_signed_base_workload_not_api_branch_label(self):
-        self.workload['event_name'] = 'pull_request_target'
-        self.run.update(event='pull_request_target', workflow_id=100, head_branch='feature')
-        runtime.verify_live_service(self.binding, self.workload, 'preloop-review-trigger.yml')
+        self.pr_target()
+        self.verify_trigger()
         self.assertEqual(len(self.calls), 3)
+
+    def pr_target(self):
+        self.workload['event_name'] = 'pull_request_target'
+        self.pr = dict(number=11, head=dict(sha='c' * 40, repo={'id': 42}),
+                       base=dict(sha='a' * 40, ref='main', repo={'id': 42}))
+        self.run.update(event='pull_request_target', workflow_id=100, head_branch='feature',
+                        head_sha='c' * 40, pull_requests=[copy.deepcopy(self.pr)])
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        event = Path(temp.name) / 'event.json'
+        event.write_text(json.dumps(dict(number=11, pull_request=self.pr)))
+        env = patch.dict(os.environ, GITHUB_EVENT_PATH=str(event))
+        env.start()
+        self.addCleanup(env.stop)
+
+    def verify_trigger(self):
+        runtime.verify_live_service(self.binding, self.workload, 'preloop-review-trigger.yml')
+
+    def test_pr_target_still_rejects_wrong_source_pr_attempt_and_cancellation(self):
+        self.pr_target()
+        original = copy.deepcopy(self.run)
+        for changes in [dict(head_sha='a' * 40), dict(pull_requests=[]),
+                        dict(pull_requests=[dict(self.pr, number=12)]),
+                        dict(pull_requests=[dict(self.pr, base=dict(
+                            sha='b' * 40, ref='main', repo={'id': 42}))]),
+                        dict(status='completed', conclusion='cancelled'),
+                        dict(run_attempt=2), dict(workflow_id=101),
+                        dict(repository={'id': 99}), dict(event='pull_request')]:
+            self.run = dict(copy.deepcopy(original), **changes)
+            with self.subTest(changes=changes), self.assertRaises(InvalidReview):
+                self.verify_trigger()
+        self.run = original
+        self.workload['workflow_sha'] = 'c' * 40
+        with self.assertRaises(InvalidReview):
+            self.verify_trigger()
 
     def test_cancelled_or_retried_workload_is_not_old_attempt(self):
         for changes in [dict(status='completed', conclusion='cancelled'),
