@@ -86,6 +86,121 @@ class TriggerTests(unittest.TestCase):
         with self.assertRaises(InvalidReview):
             trigger.prepare()
 
+    def diagnostic(self):
+        source = '487d988a-53ad-4f5d-8b84-d77bb733676f'
+        self.permit = dict(source_execution_id=source, nonce='1' * 48,
+                           expires_at='2099-01-01T00:00:00Z', pr_number=7,
+                           head_sha='a' * 40, base_sha='b' * 40,
+                           diff_sha256='c' * 64, model_id='model', flow_config_sha256='f' * 64)
+        self.binding['native_ci_contract']['diagnostic_rerun'] = self.permit
+        self.rows = [dict(self.detail, id=source, status='SUCCEEDED')]
+        os.environ['GITHUB_EVENT_NAME'] = 'workflow_dispatch'
+        self.event.write_text(json.dumps({'inputs': {
+            'pr_number': '7', 'diagnostic_execution_id': source}}))
+
+    def prepare_diagnostic(self):
+        self.diagnostic()
+        trigger.prepare()
+        self.intent = json.loads((Path(self.temp.name) / 'preloop-intent/receipt.json').read_text())
+        self.journal = dict(total_count=1, artifacts=[dict(expired=False, workflow_run={'id': 10})])
+
+    def test_diagnostic_explicit_permit_preserves_original_and_posts_no_status(self):
+        self.prepare_diagnostic()
+        before = copy.deepcopy(self.rows)
+        self.assertEqual(trigger.intent_name(self.intent), 'preloop-diagnostic-' + '1' * 48)
+        trigger.start()
+        self.assertEqual(self.calls, [('/flows/flow/trigger', 'POST',
+                                       {'pr_number': 7, 'head_sha': 'a' * 40})])
+        runtime.commit_status.assert_not_called()
+        self.assertEqual(before, self.rows)
+        saved = json.loads((Path(self.temp.name) / 'preloop-trigger/receipt.json').read_text())
+        self.assertEqual(saved['diagnostic_rerun'], self.permit)
+
+    def test_diagnostic_needs_exact_signed_permit(self):
+        for field, value in [('source_execution_id', 'f' * 36), ('head_sha', '9' * 40),
+                             ('base_sha', '9' * 40), ('pr_number', 8),
+                             ('model_id', 'other'), ('flow_config_sha256', '9' * 64),
+                             ('diff_sha256', '9' * 64), ('nonce', 'bad'),
+                             ('expires_at', '2000-01-01T00:00:00Z'),
+                             ('expires_at', '2099-01-01T00:00:00'),
+                             ('expires_at', 'invalid')]:
+            with self.subTest(field=field, value=value):
+                self.diagnostic()
+                self.permit[field] = value
+                with self.assertRaises(InvalidReview):
+                    trigger.prepare()
+        self.assertEqual(self.calls, [])
+
+    def test_diagnostic_missing_or_extra_policy_is_denied(self):
+        self.diagnostic()
+        del self.binding['native_ci_contract']['diagnostic_rerun']
+        with self.assertRaises(InvalidReview):
+            trigger.prepare()
+        self.diagnostic()
+        self.permit['arbitrary_override'] = True
+        with self.assertRaises(InvalidReview):
+            trigger.prepare()
+
+    def test_diagnostic_cannot_be_selected_by_automatic_event(self):
+        self.diagnostic()
+        os.environ['GITHUB_EVENT_NAME'] = 'pull_request_target'
+        data = json.loads(self.event.read_text())
+        data['number'] = 7
+        self.event.write_text(json.dumps(data))
+        with self.assertRaises(InvalidReview):
+            trigger.prepare()
+
+    def test_diagnostic_cannot_reuse_expired_or_existing_nonce_artifact(self):
+        self.diagnostic()
+        self.journal = dict(total_count=1, artifacts=[dict(expired=True)])
+        with self.assertRaises(InvalidReview):
+            trigger.prepare()
+
+    def test_diagnostic_rejects_missing_wrong_or_nonterminal_source(self):
+        for change in ('missing', 'flow_id', 'project_id', 'repository_identifier',
+                       'status', 'additional', 'running-pr'):
+            with self.subTest(change=change):
+                self.diagnostic()
+                if change == 'missing':
+                    self.rows = []
+                elif change == 'additional':
+                    self.rows.append(dict(self.rows[0], id='another'))
+                elif change == 'running-pr':
+                    self.rows.append(dict(self.rows[0], id='another', head_sha='9' * 40,
+                                          status='RUNNING'))
+                else:
+                    self.rows[0][change] = 'RUNNING' if change == 'status' else 'wrong'
+                with self.assertRaises(InvalidReview):
+                    trigger.prepare()
+        self.assertEqual(self.calls, [])
+
+    def test_diagnostic_rechecks_permit_and_history_before_launch(self):
+        self.prepare_diagnostic()
+        self.rows.append(dict(self.rows[0], id='another'))
+        with self.assertRaises(InvalidReview):
+            trigger.start()
+        self.assertEqual(self.calls, [])
+
+    def test_diagnostic_changed_operator_input_is_denied_before_launch(self):
+        self.prepare_diagnostic()
+        self.event.write_text(json.dumps({'inputs': {'pr_number': '7'}}))
+        with self.assertRaises(InvalidReview):
+            trigger.start()
+        self.assertEqual(self.calls, [])
+
+    def test_diagnostic_cannot_treat_original_execution_as_a_new_launch(self):
+        self.prepare_diagnostic()
+        self.detail['id'] = self.permit['source_execution_id']
+        with self.assertRaises(InvalidReview):
+            trigger.start()
+        runtime.commit_status.assert_not_called()
+
+    def test_unused_diagnostic_permit_does_not_relax_normal_duplicate_gate(self):
+        self.diagnostic()
+        self.event.write_text(json.dumps({'inputs': {'pr_number': '7'}}))
+        with self.assertRaises(InvalidReview):
+            trigger.prepare()
+
     def test_start_requires_durable_intent_before_spend(self):
         self.store_intent()
         self.journal['artifacts'][0]['workflow_run']['id'] = 11

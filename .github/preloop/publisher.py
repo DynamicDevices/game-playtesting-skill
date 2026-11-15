@@ -56,6 +56,10 @@ def owned_receipts(github, binding, eid):
     require(completion['execution_id'] == eid, 'Wrong authenticated wake')
     receipt = runtime.artifact(github, binding, 'preloop-trigger-' + eid,
                                'preloop-review-trigger.yml')
+    # Applies to BOTH review publication and the error-status fallback. A
+    # diagnostic cannot overwrite the PR gate, even if its model claims pass.
+    require('diagnostic_rerun' not in receipt,
+            'Diagnostic reproduction is not eligible for PR review/status publication')
     name = 'preloop-intent-' + str(receipt['pr_number']) + '-' + receipt['head_sha'] + '-' + receipt['base_sha']
     intent = runtime.artifact(github, binding, name, 'preloop-review-trigger.yml',
                               run_id=receipt['trigger_run_id'])

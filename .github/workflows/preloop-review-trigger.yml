@@ -9,6 +9,11 @@ on:
         description: Open same-repository PR to review
         required: true
         type: number
+      diagnostic_execution_id:
+        description: Optional original execution for an exact signed one-shot diagnostic (never publishes)
+        required: false
+        default: ''
+        type: string
 
 permissions: {}
 

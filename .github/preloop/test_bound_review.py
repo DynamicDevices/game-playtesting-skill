@@ -44,6 +44,12 @@ class BoundReviewTests(unittest.TestCase):
         with self.assertRaises(InvalidReview):
             self.check()
 
+    def test_native_placeholder_cannot_publish_despite_valid_bindings(self):
+        self.result["review"] = "placeholder"
+        self.completion["result_sha256"] = canonical_digest(self.result)
+        with self.assertRaisesRegex(InvalidReview, "Review not performed"):
+            self.check()
+
     def test_receipt_nonce_and_digest_must_match_durable_intent(self):
         for field in ("challenge", "diff_sha256"):
             saved = self.receipt[field]

@@ -124,6 +124,17 @@ class PublisherTests(unittest.TestCase):
         self.assertIn(self.eid, self.reviews[0]['body'])
         self.assertTrue((Path(self.temp.name) / 'preloop-publication/receipt.json').exists())
 
+    def test_diagnostic_cannot_publish_review_or_error_status(self):
+        self.receipt['diagnostic_rerun'] = {'nonce': '1' * 48}
+        for entry in (publisher.publish, publisher.publish_error_status):
+            with self.subTest(entry=entry.__name__):
+                with self.assertRaisesRegex(InvalidReview, 'Diagnostic reproduction'):
+                    self.run_publisher(entry=entry)
+        self.assertEqual(self.reviews, [])
+        self.assertEqual(self.statuses, [])
+        self.assertEqual(self.checks, [])
+        self.assertEqual(self.preloop_calls, [])
+
     def failure_receipt(self):
         return json.loads((Path(self.temp.name) / 'preloop-failure/receipt.json').read_text())
 

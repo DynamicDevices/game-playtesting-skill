@@ -23,6 +23,17 @@ class ReviewContractTests(unittest.TestCase):
     def test_clean_pass(self):
         self.assertEqual(self.check()[0], "success")
 
+    def test_placeholder_review_fails_with_valid_commit_bindings(self):
+        for text in ("placeholder", " PLACEHOLDER\n", "Placeholder.",
+                     "`placeholder`", "**placeholder**", '"placeholder"'):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(InvalidReview, "Review not performed"):
+                    self.check(result=dict(self.result, review=text))
+
+    def test_substantive_review_may_discuss_placeholders(self):
+        result = dict(self.result, review="The UI placeholder is correctly escaped.")
+        self.assertEqual(self.check(result=result)[0], "success")
+
     def test_all_blocking_severities_remain_visible(self):
         for severity in ("MEDIUM", "HIGH", "CRITICAL"):
             with self.subTest(severity=severity):

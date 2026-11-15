@@ -43,6 +43,12 @@ def validate_result(result, expected):
             "Invalid verdict")
     require(type(result["review"]) is str and result["review"].strip(),
             "Missing readable review")
+    # Reject the observed dummy answer even with otherwise valid bindings.
+    # Keep this exact after presentation-only normalisation: substantive
+    # reviews may legitimately discuss placeholders in the reviewed source.
+    review_text = result["review"].strip().casefold().strip("`*_\"'.!? \t\r\n")
+    require(review_text != "placeholder",
+            "Review not performed: placeholder review text")
     for field, length in (("head_sha", 40), ("base_sha", 40),
                           ("diff_sha256", 64), ("challenge", 48)):
         value = result[field]
