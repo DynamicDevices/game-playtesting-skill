@@ -278,6 +278,46 @@ class TriggerTests(unittest.TestCase):
             saved.unlink()
         self.assertEqual(len(self.calls), 4)  # One request per explicit invocation, no retry.
 
+    def test_pending_startup_is_deferred_not_verified_without_polling(self):
+        self.store_receipt()
+        self.detail.update(startup_receipt=None, startup_receipt_status='pending')
+        with patch.object(runtime, 'output') as output, patch('builtins.print') as log:
+            trigger.startup()
+        self.assertEqual(len(self.calls), 1)
+        output.assert_called_once_with(startup_verified='false', startup_receipt_status='pending')
+        self.assertIn('proof pending', log.call_args.args[0])
+        saved = json.loads((Path(self.temp.name) / 'preloop-startup/receipt.json').read_text())
+        self.assertIsNone(saved['startup_receipt'])
+        self.assertEqual(saved['startup_receipt_status'], 'pending')
+
+    def test_pending_cannot_hide_terminal_or_contradictory_receipts(self):
+        self.store_receipt()
+        original = copy.deepcopy(self.detail['startup_receipt'])
+        for state, proof in [('SUCCEEDED', None), ('FAILED', None), ('PENDING', None),
+                             ('RUNNING', {}), ('RUNNING', original), ('RUNNING', False)]:
+            self.detail.update(status=state, startup_receipt=proof, startup_receipt_status='pending')
+            with self.subTest(state=state, proof=proof), self.assertRaises(InvalidReview):
+                trigger.startup()
+            (Path(self.temp.name) / 'preloop-startup/receipt.json').unlink()
+
+    def test_startup_state_does_not_replace_or_override_proof(self):
+        self.store_receipt()
+        original = copy.deepcopy(self.detail['startup_receipt'])
+        for state, proof in [('failed', original), ('unknown', original),
+                             ('recorded', None), (None, None)]:
+            self.detail.update(startup_receipt=proof, startup_receipt_status=state)
+            with self.subTest(state=state), self.assertRaises(InvalidReview):
+                trigger.startup()
+            (Path(self.temp.name) / 'preloop-startup/receipt.json').unlink()
+
+    def test_recorded_startup_requires_full_proof(self):
+        self.store_receipt()
+        self.detail['startup_receipt_status'] = 'recorded'
+        with patch.object(runtime, 'output') as output:
+            trigger.startup()
+        output.assert_called_once_with(startup_verified='true', startup_receipt_status='recorded')
+        self.assertEqual(len(self.calls), 1)
+
     def test_startup_rejects_wrong_execution(self):
         self.store_receipt()
         self.detail['project_id'] = 'unowned'

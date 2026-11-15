@@ -72,6 +72,14 @@ class BoundReviewTests(unittest.TestCase):
                     self.check()
                 record[field] = saved
 
+    def test_completion_rejects_pending_failed_or_unknown_startup_state(self):
+        for state in ('pending', 'failed', 'unknown'):
+            self.execution['startup_receipt_status'] = state
+            with self.subTest(state=state), self.assertRaises(InvalidReview):
+                self.check()
+        self.execution['startup_receipt_status'] = 'recorded'
+        self.assertEqual(self.check()['state'], 'success')
+
     def test_missing_controller_startup_never_passes(self):
         for startup in (None, {}, dict(self.execution["startup_receipt"], setup_completed=False)):
             self.execution["startup_receipt"] = startup
