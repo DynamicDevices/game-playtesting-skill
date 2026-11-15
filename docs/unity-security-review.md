@@ -33,6 +33,31 @@ subprocess behaviour.
 
 ## Tests and known limits
 
+### PR #8: explicit route selection
+
+Manual review reproduced an inherited PLAYTEST_ROUTE reaching the bot when no
+route was selected. The correction clears that value before accepting a
+nonempty `--route`. Fake-editor regressions cover omitted, empty and explicit
+routes; no real Unity/game/device or credential request ran.
+
+SkillSpector 2.8.2 reported eight unmatched findings after these intentional
+runner/documentation changes: five AST4 subprocess calls, one E2 environment
+inheritance match and two PE3 Keychain documentation matches. Each finding text
+was verified present in the original independently reviewed source at
+`ce0f9b0c201203805db27057229030985a6b44f5`; both credential-documentation contexts
+are byte-for-byte unchanged. No subprocess primitive, credential source or API
+destination was added or broadened. The E2 boundary remains trusted local
+development code with an inherited environment, not an isolation claim.
+
+Only those eight source-content fingerprints were refreshed after this review.
+The other17 fingerprints (covering20 findings), existing dispositions, scanner
+version and empty wildcard-rule list are unchanged. There are25 fingerprints
+covering28 findings in total. This is maintenance of the recorded intentional
+behaviour, not new independent security approval, suppression of a new behaviour
+or an ASE admission exception. ASE's separate no-baseline intake stays blocked
+until its own requirements are satisfied. The combined three-PR candidate passed
+40 application tests,126 review-integration tests and template validation.
+
 35 offline application tests and 111 integration tests pass. Regressions cover
 screenshot confinement, selected credential failure, origin pinning, preservation
 of workspace changes, incomplete-run rejection and invalid-session failure.

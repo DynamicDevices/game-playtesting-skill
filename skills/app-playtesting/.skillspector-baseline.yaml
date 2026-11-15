@@ -4,35 +4,35 @@ version: 2
 scanner_version: 2.8.2
 rules: []
 fingerprints:
-- hash: sha256:2527ca99de372c07fbd17fe6883cb13b28a7a45628eef0546fa2b5f221672fc0
+- hash: sha256:80bb28a8622223cacdae20d28d733dbb5eb3cde55896455e5d94d3445bb4da04
   rule_id: AST4
   file: scripts/unity_playtest.py
   reason: Individually triaged intentional behavior; exact-source local Sandchest
     scan 57dcec64-8260-406d-8869-28f94e40c66c clean. See ../../docs/unity-security-review.md
     for each rule, counts, evidence and trust boundaries. No wildcard or permission
     waiver.
-- hash: sha256:05e59312aac18b4ef63a8f42121c0aaeb758dfa1cc3142cf41550c2b3be40054
+- hash: sha256:07a9532b02ff47c241da79adfb3e2e764a3a1f854ae563de86506b1404430a91
   rule_id: AST4
   file: scripts/unity_playtest.py
   reason: Individually triaged intentional behavior; exact-source local Sandchest
     scan 57dcec64-8260-406d-8869-28f94e40c66c clean. See ../../docs/unity-security-review.md
     for each rule, counts, evidence and trust boundaries. No wildcard or permission
     waiver.
-- hash: sha256:de657601b94a0ce34262c4aa003a8b1d26d3b5a514c35cd1d62c4144fcb8b459
+- hash: sha256:e1f2eb44320486fc72fccebe3811913d0e9cc1d67900b4651047e6b7c752084f
   rule_id: AST4
   file: scripts/unity_playtest.py
   reason: Individually triaged intentional behavior; exact-source local Sandchest
     scan 57dcec64-8260-406d-8869-28f94e40c66c clean. See ../../docs/unity-security-review.md
     for each rule, counts, evidence and trust boundaries. No wildcard or permission
     waiver.
-- hash: sha256:0625140a972fd37f2b16fffb0e32bd9893a91959388b7ad5bd085ca2c22956f4
+- hash: sha256:71ab61e93970c24bbb23f14a8efe5f0d2775fa4c8c79d3e5411bfd5f67fa510f
   rule_id: AST4
   file: scripts/unity_playtest.py
   reason: Individually triaged intentional behavior; exact-source local Sandchest
     scan 57dcec64-8260-406d-8869-28f94e40c66c clean. See ../../docs/unity-security-review.md
     for each rule, counts, evidence and trust boundaries. No wildcard or permission
     waiver.
-- hash: sha256:c9ae3a5b558845847ee90a8c7120d18afff3972570ba59ddd05ba41639e07017
+- hash: sha256:ca548e1b185d0dd5ae85f87588222e0fb00201ed3a9f0f8c8536634ee9b8669d
   rule_id: AST4
   file: scripts/unity_playtest.py
   reason: Individually triaged intentional behavior; exact-source local Sandchest
@@ -53,7 +53,7 @@ fingerprints:
     scan 57dcec64-8260-406d-8869-28f94e40c66c clean. See ../../docs/unity-security-review.md
     for each rule, counts, evidence and trust boundaries. No wildcard or permission
     waiver.
-- hash: sha256:4546be68f83c8eec0b897c5bab9f1131c91f5df287d181ef23ff982f1f1cd455
+- hash: sha256:4a74246ea23d68da0b2e51913ec16506cb0991aeb5e6862a944fa63cc63d068c
   rule_id: E2
   file: scripts/unity_playtest.py
   reason: Individually triaged intentional behavior; exact-source local Sandchest
@@ -81,14 +81,14 @@ fingerprints:
     scan 57dcec64-8260-406d-8869-28f94e40c66c clean. See ../../docs/unity-security-review.md
     for each rule, counts, evidence and trust boundaries. No wildcard or permission
     waiver.
-- hash: sha256:8004fad1cc337e1221209bf9499fb73e321f89dff67efce4bb7bb7295abb8eb7
+- hash: sha256:d76e33795e3778ae03748b6e2fcf37706aabb013a46d3b9adbf47fde85f08c16
   rule_id: PE3
   file: references/unity-in-editor.md
   reason: Individually triaged intentional behavior; exact-source local Sandchest
     scan 57dcec64-8260-406d-8869-28f94e40c66c clean. See ../../docs/unity-security-review.md
     for each rule, counts, evidence and trust boundaries. No wildcard or permission
     waiver.
-- hash: sha256:110192bd2f9036ffa049dc83fe0816b70bd3cf215aa1c3c0d2248235a4dbf891
+- hash: sha256:be7be10edae9fbe5c978a71dc0fc6c6da94c97d7cc5168d05d9034294f559c9f
   rule_id: PE3
   file: references/unity-in-editor.md
   reason: Individually triaged intentional behavior; exact-source local Sandchest

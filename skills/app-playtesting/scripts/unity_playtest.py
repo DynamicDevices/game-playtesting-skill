@@ -2,6 +2,7 @@
 """Run a Unity play-mode bot inside the editor with no window, and tidy up after the editor.
 
     python3 unity_playtest.py LABEL [--until "TEXT"] [--minutes 10] [--fresh | --from-checkpoint NAME] [--save-checkpoint NAME]
+                                    [--route "STEPS"] [--adviser]
     python3 unity_playtest.py --list-checkpoints
 
 The game's details (its name, where it saves, which test is the bot) come from a settings file, unity-playtest.json,
@@ -154,6 +155,9 @@ def main() -> int:
     parser.add_argument("--minutes", type=float, default=None, help="how long the bot plays (default: the bot's own)")
     parser.add_argument("--until", action="append", default=[], metavar="TEXT",
                         help="end the run once a log line contains this text (repeatable)")
+    parser.add_argument("--route", default=None, metavar="STEPS",
+                        help="player inputs for the bot to follow before its own rules, e.g. "
+                             "\"go ShopDoor; press Buy; repeat until Coins = 0: press Sell, press Yes\"")
     parser.add_argument("--idle-minutes", type=float, default=None,
                         help="end the run when nothing new has happened for this long (default: the bot's own; 0 never)")
     parser.add_argument("--fresh", action="store_true", help="keep the saved game as a checkpoint and start a new game")
@@ -229,8 +233,12 @@ def main() -> int:
             print("starting a new game")
 
     env = dict(os.environ, PLAYTEST_LABEL=args.label, PLAYTEST_RUN_FOLDER=str(run_folder), PLAYTEST_MEMORY=str(memory))
+    # A previous parent/session must not silently select player inputs.
+    env.pop("PLAYTEST_ROUTE", None)
     if args.until:
         env["PLAYTEST_UNTIL"] = "||".join(args.until)
+    if args.route:
+        env["PLAYTEST_ROUTE"] = args.route
     if args.idle_minutes is not None:
         env["PLAYTEST_IDLE_MINUTES"] = str(args.idle_minutes)
     if args.minutes is not None:
