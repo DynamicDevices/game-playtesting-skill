@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skills/app-playtesting/scripts"
@@ -160,13 +161,24 @@ class RunnerTests(unittest.TestCase):
         self.assertFalse((self.run_folder("quiet") / "ask-0001.json").exists())
 
     def test_a_route_is_handed_to_the_bot(self):
-        done = self.run_bot("led", "--fresh", "--route", "go Door; repeat until Coins = 0: press Sell, press Yes")
+        with patch.dict(os.environ, {"PLAYTEST_ROUTE": "press UNREQUESTED"}):
+            done = self.run_bot("led", "--fresh", "--route", "go Door; repeat until Coins = 0: press Sell, press Yes")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         log = (self.run_folder("led") / "playthrough.txt").read_text(encoding="utf-8")
         self.assertIn("route: go Door; repeat until Coins = 0: press Sell, press Yes", log)
         # the bot's own settings line never answers a question, even when the route mentions the text asked for
         failed = self.run_bot("led2", "--route", "repeat until Coins = 0: press Sell", "--until", "Coins = 0")
         self.assertEqual(failed.returncode, 1, failed.stdout)
+
+    def test_missing_or_empty_route_does_not_inherit_player_inputs(self):
+        for label, options in [("unled", ()), ("empty-route", ("--route", ""))]:
+            with self.subTest(options=options):
+                with patch.dict(os.environ, {"PLAYTEST_ROUTE": "press UNREQUESTED"}):
+                    done = self.run_bot(label, *options)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                log = (self.run_folder(label) / "playthrough.txt").read_text(encoding="utf-8")
+                self.assertNotIn("UNREQUESTED", log)
+                self.assertIn("route: ", log)
 
     def test_coverage_adds_runs_up(self):
         self.assertEqual(self.run_bot("first", "--fresh").returncode, 0)

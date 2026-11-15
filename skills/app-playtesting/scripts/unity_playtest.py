@@ -233,6 +233,8 @@ def main() -> int:
             print("starting a new game")
 
     env = dict(os.environ, PLAYTEST_LABEL=args.label, PLAYTEST_RUN_FOLDER=str(run_folder), PLAYTEST_MEMORY=str(memory))
+    # A previous parent/session must not silently select player inputs.
+    env.pop("PLAYTEST_ROUTE", None)
     if args.until:
         env["PLAYTEST_UNTIL"] = "||".join(args.until)
     if args.route:

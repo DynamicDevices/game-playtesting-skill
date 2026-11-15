@@ -110,6 +110,8 @@ somewhere, using something, pressing a button that is on screen. Steps are separ
 - `press NAME` presses the button with that name or text in whatever menu is up.
 - `repeat until TEXT: step, step` repeats the steps until a log line contains TEXT.
 
+An inherited `PLAYTEST_ROUTE` is discarded; only a nonempty `--route` selects a route for this run.
+
 The bot passes the route in `PLAYTEST_ROUTE` and logs each step as a `ROUTE` line. A step that cannot be done in
 time ends the route with a `ROUTE gave up: ...` line saying what was missing, and the rules take over. Use a route
 to make a checkpoint (`--save-checkpoint`) once, then start later runs from it. A route is not evidence that a
