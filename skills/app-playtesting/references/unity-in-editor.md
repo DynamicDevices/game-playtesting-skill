@@ -82,8 +82,8 @@ The bot is the game's own play-mode test; this skill does not supply one,
 because how to press a button or walk is different in every game. It must:
 
 - read `PLAYTEST_LABEL`, `PLAYTEST_RUN_FOLDER`, `PLAYTEST_MEMORY`, and when set
-  `PLAYTEST_UNTIL` (texts joined with `||`), `PLAYTEST_MINUTES` and
-  `PLAYTEST_IDLE_MINUTES`;
+  `PLAYTEST_UNTIL` (texts joined with `||`), `PLAYTEST_MINUTES`,
+  `PLAYTEST_IDLE_MINUTES`, `PLAYTEST_ROUTE` and `PLAYTEST_ADVISER`;
 - write `playthrough-<label>/progress.txt` as it goes and `playthrough.txt` at
   the end, in the run folder, with any screenshots beside them;
 - write one event per line as seconds, two spaces, a tag, then text:
@@ -93,11 +93,27 @@ Tags the report understands, all optional: `SETUP` (the bot's settings),
 `SCENE now <name>`, `VAR`, `OBJ`, `USE`, `SAY`, `PICK`, `CHOOSE`, `RATE`,
 `INV+`/`INV-`, `BEGIN`/`END` (a scripted sequence), `MENU <name> is open`,
 `MENU+`, `MENU-`, `LEAVE <name>`, `GOAL nothing usable matches`, `STUCK short of <name> by <n>m`,
-`STALL?`, `PAUSE`, `ERROR`, `ASK`, `TOLD`, `FINDING` and `DONE <why the run ended>`. Sections after the
+`STALL?`, `PAUSE`, `ERROR`, `ASK`, `TOLD`, `FINDING`, `ROUTE` and `DONE <why the run ended>`. Sections after the
 events start with `=== `: `FINAL VARIABLES`, `HOTSPOTS` (one line per
 interactive thing: `used N` or `never`, `on` or `off`, label, object name,
 place, and why it could not be reached, separated by ` | `) and `ERRORS`
 (`3x <text>`).
+
+## A route: a known series of player inputs
+
+Some places take a long, known series of steps to reach: fill a meter by repeating an activity, then travel. Rules
+may never find it and an adviser costs money and time on each try. `--route "STEPS"` gives the bot the inputs to
+follow first, exactly, before it goes back to its own rules. It is still a player's inputs and nothing else: walking
+somewhere, using something, pressing a button that is on screen. Steps are separated by `;`:
+
+- `go NAME` walks to the thing with that name (an entrance, a quest area, an interactive thing, which is then used).
+- `press NAME` presses the button with that name or text in whatever menu is up.
+- `repeat until TEXT: step, step` repeats the steps until a log line contains TEXT.
+
+The bot passes the route in `PLAYTEST_ROUTE` and logs each step as a `ROUTE` line. A step that cannot be done in
+time ends the route with a `ROUTE gave up: ...` line saying what was missing, and the rules take over. Use a route
+to make a checkpoint (`--save-checkpoint`) once, then start later runs from it. A route is not evidence that a
+player would find the way: say in the report that the bot was led there.
 
 ## Asking Claude when the rules run out
 

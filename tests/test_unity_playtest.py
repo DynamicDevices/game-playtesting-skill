@@ -159,6 +159,15 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(self.run_bot("quiet").returncode, 0)
         self.assertFalse((self.run_folder("quiet") / "ask-0001.json").exists())
 
+    def test_a_route_is_handed_to_the_bot(self):
+        done = self.run_bot("led", "--fresh", "--route", "go Door; repeat until Coins = 0: press Sell, press Yes")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        log = (self.run_folder("led") / "playthrough.txt").read_text(encoding="utf-8")
+        self.assertIn("route: go Door; repeat until Coins = 0: press Sell, press Yes", log)
+        # the bot's own settings line never answers a question, even when the route mentions the text asked for
+        failed = self.run_bot("led2", "--route", "repeat until Coins = 0: press Sell", "--until", "Coins = 0")
+        self.assertEqual(failed.returncode, 1, failed.stdout)
+
     def test_coverage_adds_runs_up(self):
         self.assertEqual(self.run_bot("first", "--fresh").returncode, 0)
         (self.project / "sequences.txt").write_text("Village | Village | OpenDoor\nVillage | Village | CloseDoor\n", encoding="utf-8")

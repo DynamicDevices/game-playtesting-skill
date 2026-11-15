@@ -25,7 +25,7 @@ def main():
     held = os.environ.get("FAKE_EDITOR_MODE", "ok") == "held"
 
     lines = ["=== PLAYTHROUGH (" + label + ")",
-             "   0.0  SETUP  until: " + os.environ.get("PLAYTEST_UNTIL", ""),
+             "   0.0  SETUP  until: " + os.environ.get("PLAYTEST_UNTIL", "") + "; route: " + os.environ.get("PLAYTEST_ROUTE", ""),
              "   1.0  SCENE  now Loader",
              "   2.0  SCENE  now Village",
              "   2.5  VAR    StartedFrom = " + started_from,
