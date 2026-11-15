@@ -46,6 +46,26 @@ The runtime change names only the failed fixed validation gates and preserves
 all existing actor/revision/record/state/URL checks and the same three requests.
 It adds no retry, bypass or extra status write and never dumps API records.
 
+## Startup receipt timing
+
+The controller can report `RUNNING` before checkout and setup finish. Its
+`startup_receipt_status: pending` with a null receipt is deferred evidence,
+not proof of startup or a terminal failure. The trigger saves that one
+observation and waits for authenticated completion without polling. A queued
+execution, a failed/unknown receipt state or a contradictory pending receipt
+still fails. A recorded receipt must pass all existing startup checks.
+
+At completion the trusted publisher still requires the complete controller
+receipt, exact commit, verified checkout/setup and confirmed lease revocation.
+An explicitly pending/failed/unknown state cannot pass publication, even if a
+receipt is also supplied. Older responses without the state remain compatible
+only when the full receipt independently validates. No review or passing status
+is produced merely because startup is pending.
+
+Keep the existing trusted publisher as the sole publication owner; the new
+native `platform_review` feature is not enabled by this change. Product-level
+binding/inspection rejection supplements, rather than replaces, our checks.
+
 ## Activation remains gated
 
 Independent trust-plane review and any required human verdict, green CI and

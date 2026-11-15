@@ -165,15 +165,30 @@ def startup():
             all(detail.get(key) == receipt[key] for key in
                 ['flow_id', 'project_id', 'repository_identifier', 'pr_number', 'head_sha', 'base_sha']),
             'Startup belongs to another execution or revision')
-    startup = detail.get('startup_receipt') or {}
+    startup = detail.get('startup_receipt')
+    startup_state = detail.get('startup_receipt_status')
+    # Older controllers omit the state but may still supply complete proof.
+    # A missing receipt without an explicit pending state remains a failure.
+    if startup_state is None and type(startup) is dict:
+        startup_state = 'recorded'
     runtime.write_receipt(Path(os.environ['RUNNER_TEMP']) / 'preloop-startup', {
         'execution_id': receipt['execution_id'], 'status': detail.get('status'),
+        'startup_receipt_status': startup_state,
         'head_sha': receipt['head_sha'], 'base_sha': receipt['base_sha'],
         'startup_receipt': {key: startup.get(key) for key in
             ['version', 'executor', 'lease_revoked', 'commit', 'checkout_verified',
              'setup_completed', 'agent_started_at']} if type(startup) is dict else None})
     require(detail.get('status') in ['RUNNING', 'SUCCEEDED'],
             'Native workload is queued or failed, not a verified running launch')
+    require(startup_state in ['pending', 'recorded'],
+            'Native startup receipt failed or has an unknown state')
+    if startup_state == 'pending':
+        require(detail['status'] == 'RUNNING' and startup is None,
+                'Pending startup contradicts the execution or receipt')
+        runtime.output(startup_verified='false', startup_receipt_status='pending')
+        print('Container running; checkout/setup proof pending. '
+              'Authenticated completion must verify the receipt before publication.')
+        return
     require(type(startup) is dict, 'Malformed native startup receipt')
     require(startup.get('version') == 1 and startup.get('executor') == 'hosted' and
             ((detail['status'] == 'RUNNING' and startup.get('lease_revoked') is None) or
@@ -182,6 +197,7 @@ def startup():
             startup.get('checkout_verified') is True and startup.get('setup_completed') is True and
             type(startup.get('agent_started_at')) is str and startup['agent_started_at'],
             'Native startup has not been proved; inspect the saved execution')
+    runtime.output(startup_verified='true', startup_receipt_status='recorded')
     print('Native checkout, setup and agent startup verified for ' + receipt['execution_id'])
 
 

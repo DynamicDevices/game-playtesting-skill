@@ -51,6 +51,8 @@ def bind_completed_review(completion, intent, receipt, execution, artifact, diff
     eid = bind_owned_execution(completion, intent, receipt, execution)
     require(diff_sha256 == intent["diff_sha256"], "Complete canonical diff changed")
     startup = execution.get("startup_receipt")
+    require(execution.get("startup_receipt_status") in (None, "recorded"),
+            "Controller startup receipt is not recorded at completion")
     require(type(startup) is dict and startup.get("version") == 1 and
             startup.get("executor") == "hosted" and
             startup.get("lease_revoked") is True and
