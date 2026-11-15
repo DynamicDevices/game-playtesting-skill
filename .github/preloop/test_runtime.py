@@ -95,10 +95,65 @@ class RuntimeTests(unittest.TestCase):
                 self.assertNotIn('untrusted-sensitive-value', str(caught.exception))
 
     def test_pull_request_target_revision_is_trusted_base(self):
-        run = dict(event='pull_request_target', head_sha='b' * 40, repository={'id': 42})
-        self.assertEqual(trust.trigger_workflow_sha(run, {'workflow_sha': 'b' * 40}, self.binding, 'a' * 40), 'b' * 40)
+        # Actual failed run43750543323: REST head differs from OIDC/base.
+        head = '609ff63aedb19779d318fe955cccb1964494866e'
+        base = '26da264cd5de50b045c768f5a0c87eec433a1329'
+        pr = dict(number=11, head=dict(sha=head, repo={'id': 42}),
+                  base=dict(sha=base, ref='main', repo={'id': 42}))
+        run = dict(event='pull_request_target', head_sha=head, repository={'id': 42},
+                   pull_requests=[pr])
+        receipt = dict(workflow_sha=base, pr_number=11, head_sha=head, base_sha=base)
+        self.assertEqual(trust.trigger_workflow_sha(run, receipt, self.binding, head), base)
         with self.assertRaises(InvalidReview):
-            trust.trigger_workflow_sha(run, {'workflow_sha': 'a' * 40}, self.binding, 'a' * 40)
+            trust.trigger_workflow_sha(run, dict(receipt, workflow_sha=head), self.binding, head)
+        for field, value in [('pr_number', 12), ('head_sha', base), ('base_sha', head)]:
+            with self.subTest(field=field), self.assertRaises(InvalidReview):
+                trust.trigger_workflow_sha(run, dict(receipt, **{field: value}), self.binding, head)
+        for prs in [None, [], [pr, pr], [dict(pr, number=12)],
+                    [dict(pr, head=dict(sha=base, repo={'id': 42}))],
+                    [dict(pr, head=dict(sha=head, repo={'id': 99}))],
+                    [dict(pr, base=dict(sha=base, ref='feature', repo={'id': 42}))],
+                    [dict(pr, base=dict(sha=base, ref='main', repo={'id': 99}))]]:
+            with self.subTest(prs=prs), self.assertRaises(InvalidReview):
+                trust.trigger_workflow_sha(dict(run, pull_requests=prs), receipt, self.binding, head)
+        with self.assertRaises(InvalidReview):
+            trust.trigger_workflow_sha(dict(run, head_sha=base), receipt, self.binding, head)
+
+    def test_manual_trigger_keeps_default_branch_workflow_identity(self):
+        run = dict(event='workflow_dispatch', head_sha='b' * 40, head_branch='main',
+                   repository={'id': 42})
+        receipt = dict(workflow_sha='b' * 40, head_sha='a' * 40)
+        self.assertEqual(trust.trigger_workflow_sha(run, receipt, self.binding, 'a' * 40), 'b' * 40)
+        for changes in [dict(head_branch='feature'), dict(head_sha='a' * 40),
+                        dict(repository={'id': 99}), dict(event='pull_request')]:
+            with self.subTest(changes=changes), self.assertRaises(InvalidReview):
+                trust.trigger_workflow_sha(dict(run, **changes), receipt, self.binding, 'a' * 40)
+
+    def test_completed_pr_target_artifact_verifies_sources_at_base_not_head(self):
+        head = '609ff63aedb19779d318fe955cccb1964494866e'
+        base = '26da264cd5de50b045c768f5a0c87eec433a1329'
+        binding = dict(self.binding, approved_files={'.github/preloop/runtime.py': 'f' * 64})
+        receipt = dict(workflow_sha=base, head_sha=head, base_sha=base,
+                       pr_number=11, trigger_run_id='10')
+        pr = dict(number=11, head=dict(sha=head, repo={'id': 42}),
+                  base=dict(sha=base, ref='main', repo={'id': 42}))
+        run = dict(id=10, event='pull_request_target', head_sha=head,
+                   path='.github/workflows/preloop-review-trigger.yml',
+                   repository={'id': 42}, pull_requests=[pr],
+                   status='completed', conclusion='success')
+        row = dict(id=1, name='preloop-trigger-execution', expired=False,
+                   workflow_run={'id': 10})
+        with patch.object(runtime, 'github_pages', return_value=[row]), \
+             patch.object(trust, 'download_trigger_artifact', return_value=receipt), \
+             patch.object(trust, 'verify_sources') as sources, \
+             patch.dict(os.environ, GH_TOKEN='fixture'):
+            github = lambda path: run
+            self.assertEqual(runtime.artifact(github, binding, row['name'],
+                                             'preloop-review-trigger.yml'), receipt)
+            sources.assert_called_once_with(github, binding, base, list(binding['approved_files']))
+            receipt['workflow_sha'] = head
+            with self.assertRaises(InvalidReview):
+                runtime.artifact(github, binding, row['name'], 'preloop-review-trigger.yml')
 
     def test_source_manifest_batched_tree_and_exact_content_fallback(self):
         source = b'fixed trusted code\n'

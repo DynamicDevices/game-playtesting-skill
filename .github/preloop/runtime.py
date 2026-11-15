@@ -49,10 +49,19 @@ def verify_live_service(binding, workload, workflow):
     require(run_id.isdigit(), 'Malformed live workload run')
     run = trust.request('https://api.github.com', root + '/actions/runs/' + run_id,
                         os.environ['GH_TOKEN'])
+    revision = run.get('head_sha')
+    if workload.get('event_name') == 'pull_request_target':
+        require(workflow == 'preloop-review-trigger.yml', 'PR event cannot publish')
+        event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+        pr = event.get('pull_request', {})
+        head = pr.get('head', {}).get('sha')
+        revision = trust.trigger_workflow_sha(run, dict(
+            workflow_sha=workload.get('workflow_sha'), pr_number=event.get('number'),
+            head_sha=head, base_sha=pr.get('base', {}).get('sha')), binding, head)
     require(str(run.get('id')) == run_id and
             run.get('repository', {}).get('id') == binding['repository_id'] and
             run.get('workflow_id') == identities[workflow] and
-            run.get('head_sha') == workload.get('workflow_sha') and
+            revision == workload.get('workflow_sha') and
             (workload.get('event_name') == 'pull_request_target' or
              run.get('head_branch') == binding['default_branch']) and
             run.get('event') == workload.get('event_name') and
