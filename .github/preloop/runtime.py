@@ -248,6 +248,24 @@ def artifact(github, binding, name, workflow, allow_failed=False, run_id=None, a
     return matches[0]
 
 
+def record_trigger_event():
+    """Preserve GitHub's event action beside the already validated launch intent."""
+    root = Path(os.environ['RUNNER_TEMP'])
+    intent = json.loads((root / 'preloop-intent/receipt.json').read_text())
+    event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+    name = os.environ['GITHUB_EVENT_NAME']
+    require(name in ['pull_request_target', 'workflow_dispatch'], 'Unexpected trigger event')
+    action = event.get('action') if name == 'pull_request_target' else 'workflow_dispatch'
+    if name == 'pull_request_target':
+        pr = event.get('pull_request') or {}
+        require(action in ['opened', 'synchronize', 'reopened', 'ready_for_review'] and
+                event.get('number') == intent['pr_number'] and
+                pr.get('head', {}).get('sha') == intent['head_sha'] and
+                pr.get('base', {}).get('sha') == intent['base_sha'],
+                'Event differs from the validated trigger intent')
+    write_receipt(root / 'preloop-event', dict(intent, event_name=name, event_action=action))
+
+
 def completed_publication(github, binding, run_id, execution_id, pr_number, head, base):
     """Read-only final acceptance, called AFTER the actual publisher run ends.
 

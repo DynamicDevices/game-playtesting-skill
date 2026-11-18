@@ -1,6 +1,9 @@
 """Privilege allowlist and artifact-provenance regression tests."""
 import os
 import hashlib
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -85,6 +88,28 @@ class RuntimeBoundaryTests(unittest.TestCase):
         for kwargs in [dict(branch='untrusted'), dict(event='pull_request'), dict(expired=True)]:
             with self.subTest(kwargs=kwargs), self.assertRaises(InvalidReview):
                 self.artifact(**kwargs)
+
+
+class TriggerEventTests(unittest.TestCase):
+    def test_records_exact_opened_event_and_denies_mismatched_pr(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            intent = dict(pr_number=7, head_sha='a' * 40, base_sha='b' * 40,
+                          trigger_run_id='10', workflow_sha='b' * 40)
+            runtime.write_receipt(root / 'preloop-intent', intent)
+            event = dict(number=7, action='opened', pull_request=dict(
+                head={'sha': 'a' * 40}, base={'sha': 'b' * 40}))
+            event_path = root / 'event.json'
+            event_path.write_text(json.dumps(event))
+            with patch.dict(os.environ, RUNNER_TEMP=folder, GITHUB_EVENT_PATH=str(event_path),
+                            GITHUB_EVENT_NAME='pull_request_target'):
+                runtime.record_trigger_event()
+                receipt = json.loads((root / 'preloop-event/receipt.json').read_text())
+                self.assertEqual(receipt, dict(intent, event_name='pull_request_target',
+                                               event_action='opened'))
+                event['number'] = 8
+                event_path.write_text(json.dumps(event))
+                with self.assertRaises(InvalidReview): runtime.record_trigger_event()
 
 
 class CompletedPublicationTests(unittest.TestCase):

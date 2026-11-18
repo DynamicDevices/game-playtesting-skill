@@ -54,6 +54,17 @@ jobs:
           path: ${{ runner.temp }}/preloop-intent/receipt.json
           if-no-files-found: error
           retention-days: 31
+      - name: Record the triggering event action
+        env:
+          PYTHONPATH: .github/preloop
+        run: python3 -c 'import runtime; runtime.record_trigger_event()'
+      - name: Preserve triggering event before launch
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node24
+        with:
+          name: preloop-event-${{ github.run_id }}
+          path: ${{ runner.temp }}/preloop-event/receipt.json
+          if-no-files-found: error
+          retention-days: 31
       - name: Start the native review once
         id: start
         env:
