@@ -81,6 +81,23 @@ class TriggerTests(unittest.TestCase):
             trigger.prepare()
         self.assertEqual(self.calls, [])
 
+    def test_accepted_execution_remains_observable_after_pending_status_failure(self):
+        self.store_intent()
+        with patch.object(runtime, 'commit_status', side_effect=OSError('Synthetic status failure')):
+            with self.assertRaises(OSError):
+                trigger.start()
+        runtime.output.assert_called_with(execution_id='execution')
+        trigger.startup()
+        self.assertEqual(self.calls, [('/flows/flow/trigger', 'POST',
+                                     {'pr_number': 7, 'head_sha': 'a' * 40}),
+                                    ('/flows/executions/execution', 'GET', None)])
+
+    def test_workflow_observes_startup_even_when_launch_step_failed_after_acceptance(self):
+        workflow = Path(__file__).resolve().parents[1] / 'workflows/preloop-review-trigger.yml'
+        self.assertIn("      - name: Validate native startup once\n"
+                      "        if: always() && steps.start.outputs.execution_id != ''\n",
+                      workflow.read_text())
+
     def test_prepare_refuses_prior_intent(self):
         self.journal['total_count'] = 1
         with self.assertRaises(InvalidReview):

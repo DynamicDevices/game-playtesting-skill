@@ -69,6 +69,7 @@ jobs:
           if-no-files-found: error
           retention-days: 31
       - name: Validate native startup once
+        if: always() && steps.start.outputs.execution_id != ''
         env:
           GH_TOKEN: ${{ github.token }}
           PRELOOP_CI_TRIGGER_TOKEN: ${{ secrets.PRELOOP_CI_TRIGGER_TOKEN }}

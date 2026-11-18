@@ -38,6 +38,19 @@ class BoundReviewTests(unittest.TestCase):
         self.assertEqual(len(proof["claim_sha256"]), 64)
         self.assertNotIn("challenge", self.result)
 
+    def test_delivery_event_is_not_a_second_publication_identity(self):
+        original = self.check()
+        self.completion['event_id'] = 'a34ad8f4-e998-4223-8d44-be3e30781216'
+        repeated = self.check()
+        self.assertEqual(original['claim_sha256'], repeated['claim_sha256'])
+        self.assertNotEqual(original['event_id'], repeated['event_id'])
+
+    def test_changed_result_has_a_different_immutable_claim(self):
+        original = self.check()
+        self.result['review'] = 'Complete corrected review result.'
+        self.completion['result_sha256'] = canonical_digest(self.result)
+        self.assertNotEqual(original['claim_sha256'], self.check()['claim_sha256'])
+
     def test_model_cannot_supply_bookkeeping(self):
         self.result["challenge"] = "f" * 48
         self.completion["result_sha256"] = canonical_digest(self.result)

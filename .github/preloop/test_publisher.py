@@ -1,5 +1,6 @@
 """Exercise the actual publisher entry point with isolated fake APIs."""
 import copy
+import io
 import json
 import os
 from pathlib import Path
@@ -285,6 +286,62 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(self.run_publisher(), 0)
         self.assertEqual(len(self.reviews), 1)
         self.assertEqual(len(self.checks), 1)
+
+    def test_different_delivery_event_reuses_execution_publication(self):
+        self.assertEqual(self.run_publisher(), 0)
+        (Path(self.temp.name) / 'preloop-publication/receipt.json').unlink()
+        self.completion['event_id'] = 'a34ad8f4-e998-4223-8d44-be3e30781216'
+        os.environ['GITHUB_RUN_ID'] = '13'
+        self.assertEqual(self.run_publisher(), 0)
+        self.assertEqual(len(self.reviews), 1)
+        self.assertEqual(len(self.checks), 1)
+        self.assertEqual(sum(path.endswith('/reviews') and method == 'POST'
+                             for path, method, _ in self.calls), 1)
+
+    def test_changed_result_for_published_execution_refuses_all_writes(self):
+        self.run_publisher()
+        self.result['review'] = 'Complete revised review with a different result.'
+        writes = len(self.calls)
+        with self.assertRaisesRegex(InvalidReview, 'different publication claim'):
+            self.run_publisher()
+        self.assertEqual(len(self.calls), writes)
+        self.assertEqual((len(self.reviews), len(self.checks)), (1, 1))
+
+    def test_conflicting_check_claim_refuses_before_new_review(self):
+        self.fail_review = True
+        with self.assertRaises(InvalidReview):
+            self.run_publisher()
+        self.fail_review = False
+        self.result['review'] = 'Complete revised review with a different result.'
+        writes = len(self.calls)
+        with self.assertRaisesRegex(InvalidReview, 'different check claim'):
+            self.run_publisher()
+        self.assertEqual(len(self.calls), writes)
+        self.assertFalse(self.reviews)
+
+    def test_failure_receipt_error_does_not_mask_primary_exception(self):
+        primary = OSError('Synthetic result-fetch failure')
+        self.result_failure = primary
+        with patch.object(publisher.runtime, 'write_receipt', side_effect=PermissionError('secondary')), \
+             patch('sys.stderr', new_callable=io.StringIO) as errors:
+            with self.assertRaises(OSError) as raised:
+                self.run_publisher(entry=publisher.run_publication)
+        self.assertIs(raised.exception, primary)
+        self.assertIn('failure receipt was not saved: PermissionError', errors.getvalue())
+
+    def test_failure_check_error_does_not_mask_review_send_failure(self):
+        original = self.github
+        def fail_reporting(path, method='GET', body=None):
+            if '/check-runs/' in path and method == 'PATCH':
+                raise OSError('Synthetic reporting failure')
+            return original(path, method, body)
+        self.fail_review = True
+        with patch.object(self, 'github', side_effect=fail_reporting), \
+             patch('sys.stderr', new_callable=io.StringIO) as errors:
+            with self.assertRaisesRegex(InvalidReview, 'Synthetic ambiguous send'):
+                self.run_publisher(entry=publisher.run_publication)
+        self.assertEqual(self.failure_receipt()['failure_type'], 'InvalidReview')
+        self.assertIn('failure check was not confirmed: OSError', errors.getvalue())
 
     def test_duplicate_or_substituted_check_intent_blocks_recovery(self):
         self.run_publisher()

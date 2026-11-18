@@ -248,6 +248,74 @@ def artifact(github, binding, name, workflow, allow_failed=False, run_id=None, a
     return matches[0]
 
 
+def completed_publication(github, binding, run_id, execution_id, pr_number, head, base):
+    """Read-only final acceptance, called AFTER the actual publisher run ends.
+
+    The caller supplies a live verified authority binding and a repository-bound
+    authenticated GET transport. This does not grant authority or create green
+    checks. A published custom check alone cannot satisfy this gate.
+    """
+    require(re.fullmatch('[1-9][0-9]*', str(run_id)), 'Invalid publisher run ID')
+    require(re.fullmatch('[0-9a-f-]{36}', execution_id), 'Invalid execution ID')
+    root = '/repos/' + binding['repository']
+    path = root + '/actions/runs/' + str(run_id)
+    run = github(path)
+    run_url = 'https://github.com/' + binding['repository'] + '/actions/runs/' + str(run_id)
+    require(str(run.get('id')) == str(run_id) and run.get('html_url') == run_url and
+            run.get('repository', {}).get('id') == binding['repository_id'] and
+            run.get('path', '').split('@')[0] == '.github/workflows/preloop-review-publish.yml' and
+            run.get('head_branch') == binding['default_branch'] and
+            run.get('event') in ['repository_dispatch', 'workflow_dispatch'] and
+            run.get('status') == 'completed' and run.get('conclusion') == 'success',
+            'Actual publisher run has not completed successfully')
+    receipt = artifact(github, binding, 'preloop-publication-' + execution_id,
+                       'preloop-review-publish.yml', run_id=str(run_id))
+    require(receipt.get('execution_id') == execution_id and receipt.get('head_sha') == head and
+            receipt.get('base_sha') == base and receipt.get('state') == 'success' and
+            receipt.get('actions_run_url') == run_url and
+            receipt.get('publication_run_attempt') == str(run.get('run_attempt')),
+            'Publication receipt binding or run attempt changed')
+    jobs = github_pages(github, path + '/jobs?filter=latest', 'jobs')
+    for name in ['Authenticate completion', 'Preloop review']:
+        matches = [job for job in jobs if job.get('name') == name]
+        require(len(matches) == 1 and matches[0].get('status') == 'completed' and
+                matches[0].get('conclusion') == 'success' and
+                str(matches[0].get('run_id')) == str(run_id) and
+                matches[0].get('head_sha') == run.get('head_sha'),
+                'Actual required publisher job did not succeed')
+    for key in ['review_id', 'check_id', 'status_id']:
+        require(type(receipt.get(key)) is int and receipt[key] > 0, 'Invalid publication receipt ID')
+    require(type(receipt.get('claim_sha256')) is str and
+            re.fullmatch('[0-9a-f]{64}', receipt['claim_sha256']), 'Invalid publication claim')
+    current_pr(github, binding, pr_number, head, base)
+    review = github(root + '/pulls/' + str(pr_number) + '/reviews/' + str(receipt['review_id']))
+    marker = '<!-- briar-preloop:' + execution_id + ':' + receipt['claim_sha256'] + ' -->'
+    require(review.get('id') == receipt['review_id'] and review.get('commit_id') == head and
+            review.get('state') == 'COMMENTED' and review.get('submitted_at') and
+            review.get('user', {}).get('login') == 'github-actions[bot]' and
+            review.get('html_url') == receipt.get('review_url') and
+            marker in (review.get('body') or '') and
+            hashlib.sha256((review.get('body') or '').encode('utf-8')).hexdigest() ==
+                receipt.get('review_body_sha256'), 'Final review readback changed')
+    check = github(root + '/check-runs/' + str(receipt['check_id']))
+    require(check.get('id') == receipt['check_id'] and check.get('head_sha') == head and
+            check.get('name') == 'Preloop review' and check.get('status') == 'completed' and
+            check.get('conclusion') == 'success' and check.get('details_url') == run_url and
+            check.get('app', {}).get('slug') == 'github-actions' and
+            check.get('external_id') == 'briar-preloop:' + receipt['claim_sha256'],
+            'Final check readback changed')
+    statuses = github_pages(github, root + '/commits/' + head + '/statuses')
+    latest = next((row for row in statuses if row.get('context') == 'Preloop review'), None)
+    require(latest and latest.get('id') == receipt['status_id'] and
+            latest.get('state') == 'success' and latest.get('target_url') == run_url and
+            latest.get('creator', {}).get('login') == 'github-actions[bot]',
+            'Latest review status no longer matches the publication')
+    current_pr(github, binding, pr_number, head, base)
+    return {'actions_check_verified': True, 'execution_id': execution_id,
+            'head_sha': head, 'base_sha': base, 'review_url': receipt['review_url'],
+            'actions_run_url': run_url}
+
+
 def write_receipt(folder, value):
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
