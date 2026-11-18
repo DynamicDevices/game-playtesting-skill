@@ -70,6 +70,24 @@ def owned_receipts(github, binding, eid):
     return completion, intent, receipt
 
 
+def initial_check_attempt(github, binding, eid):
+    """Use the pre-existing durable authenticated wake as a once-only intent.
+
+    The native per-PR job concurrency serializes publishers. Its authentication
+    job uploads this receipt BEFORE this job can run. A later run or attempt may
+    reuse a discovered check, but must never infer permission for another POST
+    merely from an empty check listing after an interrupted creation.
+    """
+    require(os.environ.get('GITHUB_RUN_ATTEMPT', '1') == '1',
+            'Check creation on a repeated run requires explicit reconciliation')
+    name = 'preloop-wake-' + eid
+    rows = runtime.github_pages(github, '/repos/' + binding['repository'] +
+        '/actions/artifacts?name=' + name, 'artifacts')
+    require(len(rows) == 1 and rows[0].get('name') == name and not rows[0].get('expired') and
+            str(rows[0].get('workflow_run', {}).get('id')) == os.environ['GITHUB_RUN_ID'],
+            'Earlier or missing durable publication intent; reconcile before check creation')
+
+
 def publish():
     binding, _workload, github = runtime.context('preloop-review-publish.yml')
     event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
@@ -119,6 +137,8 @@ def publish():
     require(matching or not intents, 'Ambiguous earlier review send; reconcile before replay')
     # This genuine check is created by the actual trusted Actions publisher,
     # tied to the reviewed SHA and workflow run, never by a desktop status script.
+    if not intents:
+        initial_check_attempt(github, binding, eid)
     check = intents[0] if intents else github(root + '/check-runs', 'POST', {
         'name': 'Preloop review', 'head_sha': head, 'status': 'in_progress', 'details_url': run_url,
         'external_id': 'briar-preloop:' + proof['claim_sha256'],

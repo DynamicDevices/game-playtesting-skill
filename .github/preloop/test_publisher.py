@@ -42,6 +42,9 @@ class PublisherTests(unittest.TestCase):
         self.result_failure = None
         self.history = [self.detail]
         self.fail_review = False
+        self.fail_check = False
+        self.hide_checks = False
+        self.wakes = [dict(name='preloop-wake-' + self.eid, expired=False, workflow_run={'id': 12})]
         self.readback_actor = 'github-actions[bot]'
         self.check_actor = 'github-actions'
         self.event = Path(self.temp.name) / 'event.json'
@@ -57,6 +60,8 @@ class PublisherTests(unittest.TestCase):
         if path.endswith('/check-runs') and method == 'POST':
             value = dict(body, id=11 + len(self.checks), app={'slug': self.check_actor})
             self.checks.append(value)
+            if self.fail_check:
+                raise OSError('Synthetic lost check response')
             return value
         if '/check-runs/' in path:
             value = next(row for row in self.checks if row['id'] == int(path.rsplit('/', 1)[1]))
@@ -99,6 +104,8 @@ class PublisherTests(unittest.TestCase):
         return self.detail
 
     def pages(self, _github, path, field=None):
+        if field == 'artifacts': return list(self.wakes)
+        if self.hide_checks and '/check-runs?' in path: return []
         return list(self.reviews) if path.endswith('/reviews') else list(self.checks)
 
     def run_publisher(self, stale=False, entry=None):
@@ -124,6 +131,28 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(self.checks[0]['conclusion'], 'success')
         self.assertIn(self.eid, self.reviews[0]['body'])
         self.assertTrue((Path(self.temp.name) / 'preloop-publication/receipt.json').exists())
+
+    def test_lost_initial_check_response_cannot_recreate_on_empty_later_listing(self):
+        self.fail_check = True
+        with self.assertRaisesRegex(OSError, 'lost check response'): self.run_publisher()
+        self.assertEqual(len(self.checks), 1)
+        self.fail_check = False
+        self.hide_checks = True
+        self.wakes.append(dict(name='preloop-wake-' + self.eid, expired=False, workflow_run={'id': 13}))
+        with patch.dict(os.environ, GITHUB_RUN_ID='13'), self.assertRaisesRegex(
+                InvalidReview, 'durable publication intent'):
+            self.run_publisher()
+        self.assertEqual(len(self.checks), 1)
+        self.assertFalse(self.reviews)
+
+    def test_missing_wake_or_repeated_run_cannot_create_a_check(self):
+        with patch.dict(os.environ, GITHUB_RUN_ATTEMPT='2'), self.assertRaisesRegex(
+                InvalidReview, 'repeated run'):
+            self.run_publisher()
+        self.wakes.clear()
+        with self.assertRaisesRegex(InvalidReview, 'durable publication intent'):
+            self.run_publisher()
+        self.assertFalse(self.checks or self.reviews)
 
     def test_diagnostic_cannot_publish_review_or_error_status(self):
         self.receipt['diagnostic_rerun'] = {'nonce': '1' * 48}
