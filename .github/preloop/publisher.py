@@ -158,6 +158,7 @@ def publish():
             'status_id': status['id'], 'state': proof['state'], 'actions_run_url': run_url,
             'result_sha256': completion['result_sha256'],
             'native_completion_status': proof['native_completion_status'],
+            'execution_status': detail['status'], 'review_verdict': proof['result']['verdict'],
             'controller_metadata': proof['controller_metadata']})
         return 0 if proof['state'] == 'success' else 1
     except Exception:

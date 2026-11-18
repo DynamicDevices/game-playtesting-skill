@@ -99,6 +99,7 @@ class CompletedPublicationTests(unittest.TestCase):
                         path='.github/workflows/preloop-review-publish.yml', head_sha=self.code,
                         event='repository_dispatch', status='completed', conclusion='success', run_attempt=1)
         self.receipt = dict(execution_id=self.eid, head_sha=self.head, base_sha=self.base,
+                            execution_status='SUCCEEDED', review_verdict='pass',
                             state='success', actions_run_url=self.url, publication_run_attempt='1',
                             review_id=22, check_id=11, status_id=33, claim_sha256='c' * 64,
                             review_url='https://github.com/example/repository/pull/7#review-22',
@@ -106,6 +107,8 @@ class CompletedPublicationTests(unittest.TestCase):
         self.jobs = [dict(id=n, name=name, run_id=12, head_sha=self.code,
                           status='completed', conclusion='success') for n, name in
                      [(1, 'Authenticate completion'), (2, 'Preloop review')]]
+        self.jobs[1]['steps'] = [dict(name=name, status='completed', conclusion='success') for name in
+            ['Validate, publish and independently read back', 'Preserve actual publication receipt']]
         self.review = dict(id=22, commit_id=self.head, state='COMMENTED', submitted_at='now',
                            user={'login': 'github-actions[bot]'}, body=self.body,
                            html_url=self.receipt['review_url'])
@@ -124,11 +127,12 @@ class CompletedPublicationTests(unittest.TestCase):
         raise AssertionError('Unexpected acceptance read: ' + path)
 
     def accept(self):
-        with patch.object(runtime, 'artifact', return_value=self.receipt), \
+        with patch.object(runtime, 'artifact', return_value=self.receipt) as artifact, \
              patch.object(runtime, 'current_pr') as current:
             result = runtime.completed_publication(self.github, self.binding, 12, self.eid,
                                                    7, self.head, self.base)
             self.assertEqual(current.call_count, 2)
+            self.assertTrue(artifact.call_args.kwargs['allow_failed'])
             return result
 
     def test_real_completed_jobs_accept_distinct_trusted_code_and_reviewed_heads(self):
@@ -141,6 +145,32 @@ class CompletedPublicationTests(unittest.TestCase):
             self.run[key] = value
             with self.subTest(key=key), self.assertRaises(InvalidReview): self.accept()
             self.run[key] = saved
+
+    def test_changes_requested_is_delivered_but_not_approved(self):
+        self.run['conclusion'] = self.jobs[1]['conclusion'] = 'failure'
+        self.jobs[1]['steps'][0]['conclusion'] = 'failure'
+        self.receipt.update(state='failure', review_verdict='changes_requested')
+        self.check['conclusion'] = self.statuses[0]['state'] = 'failure'
+        result = self.accept()
+        self.assertTrue(result['delivery_verified'])
+        self.assertTrue(result['actions_run_verified'])
+        self.assertFalse(result['review_approved'])
+        self.assertFalse(result['actions_check_verified'])
+
+    def test_changes_requested_cannot_hide_upload_or_other_step_failure(self):
+        self.run['conclusion'] = self.jobs[1]['conclusion'] = 'failure'
+        self.jobs[1]['steps'][0]['conclusion'] = 'failure'
+        self.receipt.update(state='failure', review_verdict='changes_requested')
+        self.check['conclusion'] = self.statuses[0]['state'] = 'failure'
+        self.jobs[1]['steps'][1]['conclusion'] = 'failure'
+        with self.assertRaises(InvalidReview): self.accept()
+
+    def test_service_error_is_never_a_delivered_review(self):
+        for key, value in [('execution_status', 'FAILED'), ('review_verdict', 'error'), ('state', 'error')]:
+            saved = self.receipt[key]
+            self.receipt[key] = value
+            with self.subTest(key=key), self.assertRaises(InvalidReview): self.accept()
+            self.receipt[key] = saved
 
     def test_missing_skipped_failed_or_foreign_job_refuses_acceptance(self):
         for key, value in [('conclusion', 'skipped'), ('conclusion', 'failure'),
