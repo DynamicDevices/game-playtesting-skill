@@ -1,5 +1,6 @@
 """Exercise the actual publisher entry point with isolated fake APIs."""
 import copy
+import io
 import json
 import os
 from pathlib import Path
@@ -41,6 +42,9 @@ class PublisherTests(unittest.TestCase):
         self.result_failure = None
         self.history = [self.detail]
         self.fail_review = False
+        self.fail_check = False
+        self.hide_checks = False
+        self.wakes = [dict(name='preloop-wake-' + self.eid, expired=False, workflow_run={'id': 12})]
         self.readback_actor = 'github-actions[bot]'
         self.check_actor = 'github-actions'
         self.event = Path(self.temp.name) / 'event.json'
@@ -56,6 +60,8 @@ class PublisherTests(unittest.TestCase):
         if path.endswith('/check-runs') and method == 'POST':
             value = dict(body, id=11 + len(self.checks), app={'slug': self.check_actor})
             self.checks.append(value)
+            if self.fail_check:
+                raise OSError('Synthetic lost check response')
             return value
         if '/check-runs/' in path:
             value = next(row for row in self.checks if row['id'] == int(path.rsplit('/', 1)[1]))
@@ -98,6 +104,8 @@ class PublisherTests(unittest.TestCase):
         return self.detail
 
     def pages(self, _github, path, field=None):
+        if field == 'artifacts': return list(self.wakes)
+        if self.hide_checks and '/check-runs?' in path: return []
         return list(self.reviews) if path.endswith('/reviews') else list(self.checks)
 
     def run_publisher(self, stale=False, entry=None):
@@ -123,6 +131,28 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(self.checks[0]['conclusion'], 'success')
         self.assertIn(self.eid, self.reviews[0]['body'])
         self.assertTrue((Path(self.temp.name) / 'preloop-publication/receipt.json').exists())
+
+    def test_lost_initial_check_response_cannot_recreate_on_empty_later_listing(self):
+        self.fail_check = True
+        with self.assertRaisesRegex(OSError, 'lost check response'): self.run_publisher()
+        self.assertEqual(len(self.checks), 1)
+        self.fail_check = False
+        self.hide_checks = True
+        self.wakes.append(dict(name='preloop-wake-' + self.eid, expired=False, workflow_run={'id': 13}))
+        with patch.dict(os.environ, GITHUB_RUN_ID='13'), self.assertRaisesRegex(
+                InvalidReview, 'durable publication intent'):
+            self.run_publisher()
+        self.assertEqual(len(self.checks), 1)
+        self.assertFalse(self.reviews)
+
+    def test_missing_wake_or_repeated_run_cannot_create_a_check(self):
+        with patch.dict(os.environ, GITHUB_RUN_ATTEMPT='2'), self.assertRaisesRegex(
+                InvalidReview, 'repeated run'):
+            self.run_publisher()
+        self.wakes.clear()
+        with self.assertRaisesRegex(InvalidReview, 'durable publication intent'):
+            self.run_publisher()
+        self.assertFalse(self.checks or self.reviews)
 
     def test_diagnostic_cannot_publish_review_or_error_status(self):
         self.receipt['diagnostic_rerun'] = {'nonce': '1' * 48}
@@ -285,6 +315,62 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(self.run_publisher(), 0)
         self.assertEqual(len(self.reviews), 1)
         self.assertEqual(len(self.checks), 1)
+
+    def test_different_delivery_event_reuses_execution_publication(self):
+        self.assertEqual(self.run_publisher(), 0)
+        (Path(self.temp.name) / 'preloop-publication/receipt.json').unlink()
+        self.completion['event_id'] = 'a34ad8f4-e998-4223-8d44-be3e30781216'
+        os.environ['GITHUB_RUN_ID'] = '13'
+        self.assertEqual(self.run_publisher(), 0)
+        self.assertEqual(len(self.reviews), 1)
+        self.assertEqual(len(self.checks), 1)
+        self.assertEqual(sum(path.endswith('/reviews') and method == 'POST'
+                             for path, method, _ in self.calls), 1)
+
+    def test_changed_result_for_published_execution_refuses_all_writes(self):
+        self.run_publisher()
+        self.result['review'] = 'Complete revised review with a different result.'
+        writes = len(self.calls)
+        with self.assertRaisesRegex(InvalidReview, 'different publication claim'):
+            self.run_publisher()
+        self.assertEqual(len(self.calls), writes)
+        self.assertEqual((len(self.reviews), len(self.checks)), (1, 1))
+
+    def test_conflicting_check_claim_refuses_before_new_review(self):
+        self.fail_review = True
+        with self.assertRaises(InvalidReview):
+            self.run_publisher()
+        self.fail_review = False
+        self.result['review'] = 'Complete revised review with a different result.'
+        writes = len(self.calls)
+        with self.assertRaisesRegex(InvalidReview, 'different check claim'):
+            self.run_publisher()
+        self.assertEqual(len(self.calls), writes)
+        self.assertFalse(self.reviews)
+
+    def test_failure_receipt_error_does_not_mask_primary_exception(self):
+        primary = OSError('Synthetic result-fetch failure')
+        self.result_failure = primary
+        with patch.object(publisher.runtime, 'write_receipt', side_effect=PermissionError('secondary')), \
+             patch('sys.stderr', new_callable=io.StringIO) as errors:
+            with self.assertRaises(OSError) as raised:
+                self.run_publisher(entry=publisher.run_publication)
+        self.assertIs(raised.exception, primary)
+        self.assertIn('failure receipt was not saved: PermissionError', errors.getvalue())
+
+    def test_failure_check_error_does_not_mask_review_send_failure(self):
+        original = self.github
+        def fail_reporting(path, method='GET', body=None):
+            if '/check-runs/' in path and method == 'PATCH':
+                raise OSError('Synthetic reporting failure')
+            return original(path, method, body)
+        self.fail_review = True
+        with patch.object(self, 'github', side_effect=fail_reporting), \
+             patch('sys.stderr', new_callable=io.StringIO) as errors:
+            with self.assertRaisesRegex(InvalidReview, 'Synthetic ambiguous send'):
+                self.run_publisher(entry=publisher.run_publication)
+        self.assertEqual(self.failure_receipt()['failure_type'], 'InvalidReview')
+        self.assertIn('failure check was not confirmed: OSError', errors.getvalue())
 
     def test_duplicate_or_substituted_check_intent_blocks_recovery(self):
         self.run_publisher()

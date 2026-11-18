@@ -1,5 +1,6 @@
 """Authenticate completion, then publish owned results without rerunning models."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -69,6 +70,24 @@ def owned_receipts(github, binding, eid):
     return completion, intent, receipt
 
 
+def initial_check_attempt(github, binding, eid):
+    """Use the pre-existing durable authenticated wake as a once-only intent.
+
+    The native per-PR job concurrency serializes publishers. Its authentication
+    job uploads this receipt BEFORE this job can run. A later run or attempt may
+    reuse a discovered check, but must never infer permission for another POST
+    merely from an empty check listing after an interrupted creation.
+    """
+    require(os.environ.get('GITHUB_RUN_ATTEMPT', '1') == '1',
+            'Check creation on a repeated run requires explicit reconciliation')
+    name = 'preloop-wake-' + eid
+    rows = runtime.github_pages(github, '/repos/' + binding['repository'] +
+        '/actions/artifacts?name=' + name, 'artifacts')
+    require(len(rows) == 1 and rows[0].get('name') == name and not rows[0].get('expired') and
+            str(rows[0].get('workflow_run', {}).get('id')) == os.environ['GITHUB_RUN_ID'],
+            'Earlier or missing durable publication intent; reconcile before check creation')
+
+
 def publish():
     binding, _workload, github = runtime.context('preloop-review-publish.yml')
     event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
@@ -94,11 +113,22 @@ def publish():
     body = review_body(proof['result']) + '\nExecution: https://preloop.ai/console/flows/executions/' + eid
     body += '\n\nResult: ' + proof['state'] + '\n\nPosted by Briar on Alex\'s behalf.\n' + marker
     reviews = runtime.github_pages(github, path + '/reviews')
-    matching = [review for review in reviews if marker in (review.get('body') or '') and
+    execution_marker = '<!-- briar-preloop:' + eid + ':'
+    owned = [review for review in reviews if execution_marker in (review.get('body') or '') and
+             review.get('user', {}).get('login') == 'github-actions[bot]']
+    require(all(marker in (review.get('body') or '') and review.get('commit_id') == head
+                for review in owned), 'Execution already has a different publication claim; reconcile')
+    matching = [review for review in owned if marker in (review.get('body') or '') and
                 review.get('commit_id') == head and review.get('user', {}).get('login') == 'github-actions[bot]']
     require(len(matching) <= 1, 'Duplicate review publication')
     checks = runtime.github_pages(github, root + '/commits/' + head +
                                   '/check-runs?check_name=Preloop%20review&filter=all', 'check_runs')
+    owned_checks = [check for check in checks if
+                    execution_marker in (check.get('output', {}).get('text') or '') and
+                    check.get('app', {}).get('slug') == 'github-actions']
+    require(all(check.get('external_id') == 'briar-preloop:' + proof['claim_sha256']
+                for check in owned_checks),
+            'Execution already has a different check claim; reconcile')
     intents = [check for check in checks if check.get('external_id') == 'briar-preloop:' + proof['claim_sha256']]
     require(len(intents) <= 1, 'Duplicate check intent; reconcile before recovery')
     if intents:
@@ -107,6 +137,8 @@ def publish():
     require(matching or not intents, 'Ambiguous earlier review send; reconcile before replay')
     # This genuine check is created by the actual trusted Actions publisher,
     # tied to the reviewed SHA and workflow run, never by a desktop status script.
+    if not intents:
+        initial_check_attempt(github, binding, eid)
     check = intents[0] if intents else github(root + '/check-runs', 'POST', {
         'name': 'Preloop review', 'head_sha': head, 'status': 'in_progress', 'details_url': run_url,
         'external_id': 'briar-preloop:' + proof['claim_sha256'],
@@ -141,16 +173,23 @@ def publish():
         runtime.write_receipt(Path(os.environ['RUNNER_TEMP']) / 'preloop-publication', {
             'execution_id': eid, 'head_sha': head, 'base_sha': base, 'claim_sha256': proof['claim_sha256'],
             'review_id': review['id'], 'review_url': readback['html_url'], 'check_id': check['id'],
+            'review_body_sha256': hashlib.sha256(body.encode('utf-8')).hexdigest(),
+            'publication_run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT', '1'),
             'status_id': status['id'], 'state': proof['state'], 'actions_run_url': run_url,
             'result_sha256': completion['result_sha256'],
             'native_completion_status': proof['native_completion_status'],
+            'execution_status': detail['status'], 'review_verdict': proof['result']['verdict'],
             'controller_metadata': proof['controller_metadata']})
         return 0 if proof['state'] == 'success' else 1
     except Exception:
-        github(root + '/check-runs/' + str(check['id']), 'PATCH', {
-            'status': 'completed', 'conclusion': 'failure',
-            'output': {'title': 'Publication failed', 'summary': 'Reconcile saved intent before any resend.',
-                       'text': marker}})
+        try:
+            github(root + '/check-runs/' + str(check['id']), 'PATCH', {
+                'status': 'completed', 'conclusion': 'failure',
+                'output': {'title': 'Publication failed', 'summary': 'Reconcile saved intent before any resend.',
+                           'text': marker}})
+        except Exception as secondary:
+            print('Publication failure check was not confirmed: ' + type(secondary).__name__,
+                  file=sys.stderr)
         raise
 
 
@@ -180,11 +219,15 @@ def run_publication():
         except Exception:
             # Unknown ownership, stale target or unavailable API must not write.
             print('Error status was not confirmed; reconcile the saved run.', file=sys.stderr)
-        runtime.write_receipt(Path(os.environ['RUNNER_TEMP']) / 'preloop-failure', {
-            'state': 'error', 'execution_id': os.environ['PRELOOP_EXECUTION_ID'],
-            'publication_run_id': os.environ['GITHUB_RUN_ID'],
-            'failure_type': type(failure).__name__, 'error_status_confirmed': posted,
-            'recovery': 'Reconcile this run, correct the failed phase, then recover the owned result; never rerun inference for publication.'})
+        try:
+            runtime.write_receipt(Path(os.environ['RUNNER_TEMP']) / 'preloop-failure', {
+                'state': 'error', 'execution_id': os.environ['PRELOOP_EXECUTION_ID'],
+                'publication_run_id': os.environ['GITHUB_RUN_ID'],
+                'failure_type': type(failure).__name__, 'error_status_confirmed': posted,
+                'recovery': 'Reconcile this run, correct the failed phase, then recover the owned result; never rerun inference for publication.'})
+        except Exception as secondary:
+            print('Publication failure receipt was not saved: ' + type(secondary).__name__,
+                  file=sys.stderr)
         raise
 
 

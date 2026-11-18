@@ -67,7 +67,9 @@ def bind_completed_review(completion, intent, receipt, execution, artifact, diff
     # Add ONLY externally verified bookkeeping, never a model-provided value.
     bound = {**result, "diff_sha256": expected["diff_sha256"], "challenge": expected["challenge"]}
     state, validated = publication_state(execution["status"], bound, expected)
-    claim = {**expected, "execution_id": eid, "event_id": completion["event_id"],
+    # Delivery events are audit records, not publication identities. Different
+    # authenticated events for the same immutable result must reuse one claim.
+    claim = {**expected, "execution_id": eid,
              "result_sha256": completion["result_sha256"]}
     return {"state": state, "result": validated, "claim_sha256": canonical_digest(claim),
             "execution_id": eid, "event_id": completion["event_id"],

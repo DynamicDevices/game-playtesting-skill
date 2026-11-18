@@ -248,6 +248,112 @@ def artifact(github, binding, name, workflow, allow_failed=False, run_id=None, a
     return matches[0]
 
 
+def record_trigger_event():
+    """Preserve GitHub's event action beside the already validated launch intent."""
+    root = Path(os.environ['RUNNER_TEMP'])
+    intent = json.loads((root / 'preloop-intent/receipt.json').read_text())
+    event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+    name = os.environ['GITHUB_EVENT_NAME']
+    require(name in ['pull_request_target', 'workflow_dispatch'], 'Unexpected trigger event')
+    action = event.get('action') if name == 'pull_request_target' else 'workflow_dispatch'
+    if name == 'pull_request_target':
+        pr = event.get('pull_request') or {}
+        require(action in ['opened', 'synchronize', 'reopened', 'ready_for_review'] and
+                event.get('number') == intent['pr_number'] and
+                pr.get('head', {}).get('sha') == intent['head_sha'] and
+                pr.get('base', {}).get('sha') == intent['base_sha'],
+                'Event differs from the validated trigger intent')
+    write_receipt(root / 'preloop-event', dict(intent, event_name=name, event_action=action))
+
+
+def completed_publication(github, binding, run_id, execution_id, pr_number, head, base):
+    """Read-only final acceptance, called AFTER the actual publisher run ends.
+
+    The caller supplies a live verified authority binding and a repository-bound
+    authenticated GET transport. This does not grant authority or create green
+    checks. A published custom check alone cannot satisfy this gate.
+    """
+    require(re.fullmatch('[1-9][0-9]*', str(run_id)), 'Invalid publisher run ID')
+    require(re.fullmatch('[0-9a-f-]{36}', execution_id), 'Invalid execution ID')
+    root = '/repos/' + binding['repository']
+    path = root + '/actions/runs/' + str(run_id)
+    run = github(path)
+    run_url = 'https://github.com/' + binding['repository'] + '/actions/runs/' + str(run_id)
+    require(str(run.get('id')) == str(run_id) and run.get('html_url') == run_url and
+            run.get('repository', {}).get('id') == binding['repository_id'] and
+            run.get('path', '').split('@')[0] == '.github/workflows/preloop-review-publish.yml' and
+            run.get('head_branch') == binding['default_branch'] and
+            run.get('event') in ['repository_dispatch', 'workflow_dispatch'] and
+            run.get('status') == 'completed' and run.get('conclusion') in ['success', 'failure'],
+            'Actual publisher run has not completed with a review outcome')
+    receipt = artifact(github, binding, 'preloop-publication-' + execution_id,
+                       'preloop-review-publish.yml', allow_failed=True, run_id=str(run_id))
+    state = receipt.get('state')
+    require(state in ['success', 'failure'] and receipt.get('execution_status') == 'SUCCEEDED' and
+            receipt.get('review_verdict') == ('pass' if state == 'success' else 'changes_requested'),
+            'Receipt does not represent a completed valid review')
+    require(receipt.get('execution_id') == execution_id and receipt.get('head_sha') == head and
+            receipt.get('base_sha') == base and run.get('conclusion') == state and
+            receipt.get('actions_run_url') == run_url and
+            receipt.get('publication_run_attempt') == str(run.get('run_attempt')),
+            'Publication receipt binding or run attempt changed')
+    jobs = github_pages(github, path + '/jobs?filter=latest', 'jobs')
+    require(len(jobs) == 2, 'Unexpected publisher workflow jobs')
+    for name in ['Authenticate completion', 'Preloop review']:
+        matches = [job for job in jobs if job.get('name') == name]
+        require(len(matches) == 1 and matches[0].get('status') == 'completed' and
+                matches[0].get('conclusion') == ('success' if name == 'Authenticate completion' else state) and
+                str(matches[0].get('run_id')) == str(run_id) and
+                matches[0].get('head_sha') == run.get('head_sha'),
+                'Actual required publisher job did not succeed')
+        if name == 'Preloop review':
+            steps = matches[0].get('steps') or []
+            for step_name, conclusion in [('Validate, publish and independently read back', state),
+                                           ('Preserve actual publication receipt', 'success')]:
+                selected = [step for step in steps if step.get('name') == step_name]
+                require(len(selected) == 1 and selected[0].get('status') == 'completed' and
+                        selected[0].get('conclusion') == conclusion,
+                        'Required publication or durable receipt step did not finish')
+            require(all(step.get('conclusion') in ['success', 'skipped'] or
+                        state == 'failure' and step.get('name') ==
+                        'Validate, publish and independently read back' and
+                        step.get('conclusion') == 'failure' for step in steps),
+                    'A non-review workflow failure prevents delivery acceptance')
+    for key in ['review_id', 'check_id', 'status_id']:
+        require(type(receipt.get(key)) is int and receipt[key] > 0, 'Invalid publication receipt ID')
+    require(type(receipt.get('claim_sha256')) is str and
+            re.fullmatch('[0-9a-f]{64}', receipt['claim_sha256']), 'Invalid publication claim')
+    current_pr(github, binding, pr_number, head, base)
+    review = github(root + '/pulls/' + str(pr_number) + '/reviews/' + str(receipt['review_id']))
+    marker = '<!-- briar-preloop:' + execution_id + ':' + receipt['claim_sha256'] + ' -->'
+    require(review.get('id') == receipt['review_id'] and review.get('commit_id') == head and
+            review.get('state') == 'COMMENTED' and review.get('submitted_at') and
+            review.get('user', {}).get('login') == 'github-actions[bot]' and
+            review.get('html_url') == receipt.get('review_url') and
+            marker in (review.get('body') or '') and
+            hashlib.sha256((review.get('body') or '').encode('utf-8')).hexdigest() ==
+                receipt.get('review_body_sha256'), 'Final review readback changed')
+    check = github(root + '/check-runs/' + str(receipt['check_id']))
+    require(check.get('id') == receipt['check_id'] and check.get('head_sha') == head and
+            check.get('name') == 'Preloop review' and check.get('status') == 'completed' and
+            check.get('conclusion') == state and check.get('details_url') == run_url and
+            check.get('app', {}).get('slug') == 'github-actions' and
+            check.get('external_id') == 'briar-preloop:' + receipt['claim_sha256'],
+            'Final check readback changed')
+    statuses = github_pages(github, root + '/commits/' + head + '/statuses')
+    latest = next((row for row in statuses if row.get('context') == 'Preloop review'), None)
+    require(latest and latest.get('id') == receipt['status_id'] and
+            latest.get('state') == state and latest.get('target_url') == run_url and
+            latest.get('creator', {}).get('login') == 'github-actions[bot]',
+            'Latest review status no longer matches the publication')
+    current_pr(github, binding, pr_number, head, base)
+    return {'delivery_verified': True, 'actions_run_verified': True,
+            'actions_check_verified': state == 'success', 'review_approved': state == 'success',
+            'review_state': state, 'review_verdict': receipt['review_verdict'], 'execution_id': execution_id,
+            'head_sha': head, 'base_sha': base, 'review_url': receipt['review_url'],
+            'actions_run_url': run_url}
+
+
 def write_receipt(folder, value):
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
