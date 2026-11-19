@@ -1,5 +1,6 @@
 """Offline API-contract/provenance checks. Never contact GitHub or Preloop."""
 import base64
+import copy
 import hashlib
 import os
 from pathlib import Path
@@ -14,6 +15,94 @@ from review_contract import InvalidReview
 class RuntimeTests(unittest.TestCase):
     def setUp(self):
         self.binding = dict(repository='example/repository', repository_id=42, default_branch='main')
+
+    def historical_fixture(self):
+        path = '.github/preloop/runtime.py'
+        scope = dict(execution_id='487d988a-53ad-4f5d-8b84-d77bb733676f',
+                     pr_number=7, head_sha='a' * 40, base_sha='b' * 40,
+                     result_sha256='c' * 64)
+        history = dict(workflow_sha='b' * 40, files={path: 'e' * 64},
+                       git_blobs={path: 'e' * 40})
+        permit = dict(scope, original_publisher_run_id='11', trigger_run_id='10',
+                      failed_before_check_creation=True, historical_sources=history)
+        binding = dict(self.binding, approved_files={path: 'f' * 64},
+                       approved_blobs={path: 'f' * 40}, publication_recovery=permit)
+        run = dict(id=11, repository={'id': 42}, status='completed',
+                   conclusion='failure', run_attempt=1)
+        wake = dict(completion=scope, authenticated_run_id='11', workflow_sha='b' * 40)
+        return binding, run, wake
+
+    def test_historical_target_is_exact_and_does_not_rebind_other_prs(self):
+        binding, _, wake = self.historical_fixture()
+        permit = binding['publication_recovery']
+        permit['current_target_sha'] = 'd' * 40
+        pr = dict(state='open', draft=False, author_association='OWNER', labels=[],
+                  user={'login': 'owner'}, head={'sha': 'a' * 40, 'repo': {'id': 42}},
+                  base={'sha': 'd' * 40, 'ref': 'main', 'repo': {'id': 42}})
+        self.assertIs(runtime.current_pr(lambda _: pr, binding, 7, 'a' * 40, 'b' * 40), pr)
+        for number, head, base in [(8, 'a' * 40, 'b' * 40),
+                                   (7, 'e' * 40, 'b' * 40), (7, 'a' * 40, 'e' * 40)]:
+            with self.subTest(number=number, head=head, base=base), self.assertRaises(InvalidReview):
+                runtime.current_pr(lambda _: pr, binding, number, head, base)
+        pr['base']['sha'] = 'e' * 40
+        with self.assertRaises(InvalidReview):
+            runtime.current_pr(lambda _: pr, binding, 7, 'a' * 40, 'b' * 40)
+
+    def test_historical_delivery_is_never_current_base_approval(self):
+        from test_runtime_boundaries import CompletedPublicationTests
+        case = CompletedPublicationTests('test_real_completed_jobs_accept_distinct_trusted_code_and_reviewed_heads')
+        case.setUp()
+        case.binding['publication_recovery'] = dict(pr_number=7, head_sha=case.head,
+            base_sha=case.base, current_target_sha=case.code)
+        case.receipt['historical_target_sha'] = case.code
+        result = case.accept()
+        self.assertTrue(result['delivery_verified'])
+        self.assertFalse(result['review_approved'])
+        case.receipt['historical_target_sha'] = 'f' * 40
+        with self.assertRaises(InvalidReview): case.accept()
+
+    def test_historical_completion_uses_complete_signed_old_manifest(self):
+        binding, run, wake = self.historical_fixture()
+        source = runtime.receipt_source_binding(binding, run, 'b' * 40, wake,
+            'preloop-wake-' + wake['completion']['execution_id'], 'preloop-review-publish.yml')
+        self.assertEqual(source['approved_files'], binding['publication_recovery']['historical_sources']['files'])
+        self.assertNotEqual(source['approved_files'], binding['approved_files'])
+        self.assertIs(runtime.receipt_source_binding(binding, dict(run, id=12),
+            'd' * 40, wake, 'preloop-wake-x', 'preloop-review-publish.yml'), binding)
+
+    def test_historical_trigger_scope_and_names_are_exact(self):
+        binding, run, wake = self.historical_fixture()
+        scope = wake['completion']
+        value = dict(scope, trigger_run_id='10', workflow_sha='b' * 40)
+        del value['result_sha256']
+        run.update(id=10, conclusion='success')
+        for name in ('preloop-trigger-' + scope['execution_id'], 'preloop-event-10',
+                     'preloop-intent-7-' + 'a' * 40 + '-' + 'b' * 40):
+            selected = runtime.receipt_source_binding(binding, run, 'b' * 40, value,
+                                                       name, 'preloop-review-trigger.yml')
+            self.assertNotEqual(selected['approved_files'], binding['approved_files'])
+        with self.assertRaises(InvalidReview):
+            runtime.receipt_source_binding(binding, run, 'b' * 40, value,
+                                           'preloop-event-9', 'preloop-review-trigger.yml')
+
+    def test_historical_source_denies_mismatch_missing_scope_and_partial_manifest(self):
+        original, original_run, original_wake = self.historical_fixture()
+        cases = [('run', 'run_attempt', 2), ('run', 'repository', {'id': 9}),
+                 ('run', 'conclusion', 'success'), ('run', 'status', 'in_progress'),
+                 ('wake', 'authenticated_run_id', '12'), ('wake', 'workflow_sha', 'd' * 40),
+                 ('scope', 'head_sha', 'd' * 40), ('scope', 'result_sha256', 'd' * 64),
+                 ('history', 'workflow_sha', 'd' * 40), ('history', 'files', {}),
+                 ('history', 'git_blobs', {}), ('permit', 'failed_before_check_creation', False)]
+        for section, key, value in cases:
+            binding, run, wake = copy.deepcopy((original, original_run, original_wake))
+            targets = dict(run=run, wake=wake, scope=wake['completion'],
+                           permit=binding['publication_recovery'],
+                           history=binding['publication_recovery']['historical_sources'])
+            targets[section][key] = value
+            with self.subTest(section=section, key=key), self.assertRaises(InvalidReview):
+                runtime.receipt_source_binding(binding, run, 'b' * 40, wake,
+                    'preloop-wake-' + original_wake['completion']['execution_id'],
+                    'preloop-review-publish.yml')
 
     def test_status_uses_real_combined_sha_not_nonexistent_status_sha(self):
         status = dict(id=9, context='Preloop review', state='success', target_url='https://github.com/example/repository/actions/runs/12',

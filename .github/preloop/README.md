@@ -46,12 +46,42 @@ because this marker is present. The model prompt must request this exact schema
 without asking the model to run scripts or validate its own output.
 
 The publisher first verifies the signed digest of the untouched public result
-projection, including any `container_termination` object. It requires empty
-`result_withheld_paths` and explicit successful `schema_validation` with no errors.
+projection, including any `container_termination` object. It accepts only empty
+`result_withheld_paths` or exactly `["/container_termination"]`; the latter requires
+that object to be absent. Every reviewer-field omission, duplicate/subpath or
+contradictory presence fails. Explicit successful `schema_validation` with no errors is required.
 Only then does it separate the documented controller object and completion marker
 from the strict reviewer judgement. Unknown fields, malformed telemetry, missing
 schema proof and error responses fail closed. Telemetry and the original digest
 are preserved in the publication receipt, not posted as review findings.
+
+Privileged workflow entry points use `python3 -I -B` and a signature-verifying
+bootstrap. It stages only the exact SHA256/Git-blob-approved files before
+importing publisher/trigger modules; unlisted checkout modules and bytecode do
+not enter the privileged import path.
+
+The single historical pilot recovery requires a separately signed original
+execution/result/revision tuple, original producer manifests and the exact
+advanced target commit. It preserves the original reviewed base, identifies
+that base and the current target in the review, and never counts as approval
+against the advanced target. Other head/base changes remain stale. Both
+workflows must be active for the live revocation check: restore only the recorded
+gameplay trigger after reviewed-source/policy/preflight gates, recover without a
+new PR event or inference, and pause it again on failure.
+
+With the signed completion-gate policy, the publisher posts the validated review
+but keeps its custom check and status pending. A repository-local `workflow_run`
+finalizer independently verifies the completed ORIGINAL publisher, required
+jobs/steps, durable publication receipt, authenticated completion and unchanged
+review/claim/revisions. It saves its own unique durable intent before releasing
+only the owned check/status. Failed/cancelled publishers or failed receipt uploads
+cannot become green. The finalizer cannot post another review or run inference.
+Its final status links its actual Actions run; the original publisher's identity
+remains in the publication evidence. No job claims to observe its own future
+completion. Finalizer-only ancillary logging is not added as a new dependency
+after gate release. The acceptance caller reads the actual completed original
+Actions run, finalizer intent and real review/check/status, and refuses historical
+delivery as current-base approval. Ambiguous writes require reconciliation.
 
 Before live use, coordinate the flow's result_schema/prompt and new signed config
 hash with this contract, and include native_result.py in the complete signed

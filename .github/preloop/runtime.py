@@ -30,6 +30,8 @@ def verify_live_service(binding, workload, workflow):
             policy.get('explicit_posture_approval') is True,
             'Missing accepted live service-revocation mechanism')
     names = {'preloop-review-trigger.yml', 'preloop-review-publish.yml'}
+    if binding.get('publication_finalizer'):
+        names.add('preloop-review-finalize.yml')
     paths = policy.get('workflow_paths')
     require(type(paths) is dict and set(paths) == names and workflow in names and
             all(paths[name] == '.github/workflows/' + name for name in names),
@@ -83,6 +85,8 @@ def context(workflow):
         if method != 'GET':
             relative = path.removeprefix('/repos/' + repository + '/')
             allowed = ((method == 'POST' and re.fullmatch('statuses/[0-9a-f]{40}', relative)) or
+                       (workflow == 'preloop-review-finalize.yml' and method == 'PATCH' and
+                        re.fullmatch('check-runs/[1-9][0-9]*', relative)) or
                        (workflow == 'preloop-review-publish.yml' and
                         ((method == 'POST' and re.fullmatch('pulls/[1-9][0-9]*/reviews', relative)) or
                          (method == 'POST' and relative == 'check-runs') or
@@ -166,6 +170,17 @@ def github_pages(github, path, field=None):
         page_number += 1
 
 
+def historical_target(binding, number, head, base):
+    permit = binding.get('publication_recovery')
+    if type(permit) is not dict or any(permit.get(k) != v for k, v in
+            [('pr_number', number), ('head_sha', head), ('base_sha', base)]):
+        return None
+    target = permit.get('current_target_sha')
+    require(type(target) is str and re.fullmatch('[0-9a-f]{40}', target),
+            'Missing exact signed recovery target')
+    return target if target != base else None
+
+
 def current_pr(github, binding, number, head=None, base=None):
     require(type(number) is int and number > 0, 'Invalid PR number')
     pr = github('/repos/' + binding['repository'] + '/pulls/' + str(number))
@@ -180,7 +195,8 @@ def current_pr(github, binding, number, head=None, base=None):
     for sha in [pr['head']['sha'], pr['base']['sha']]:
         require(re.fullmatch('[0-9a-f]{40}', sha), 'Invalid GitHub commit')
     require(head is None or pr['head']['sha'] == head, 'PR head changed')
-    require(base is None or pr['base']['sha'] == base, 'PR base changed')
+    require(base is None or pr['base']['sha'] == base or
+            pr['base']['sha'] == historical_target(binding, number, head, base), 'PR base changed')
     return pr
 
 
@@ -214,6 +230,75 @@ def full_diff_sha256(repository, base, head, github_token):
             return hashlib.file_digest(diff, 'sha256').hexdigest()
 
 
+def recovery_scope(binding, completion):
+    """Only a separately signed, exact execution/result reconciliation is usable."""
+    permit = binding.get('publication_recovery')
+    require(type(permit) is dict and permit.get('failed_before_check_creation') is True,
+            'Missing explicit pre-check failure reconciliation')
+    for key in ['execution_id', 'pr_number', 'head_sha', 'base_sha', 'result_sha256']:
+        require(key in permit and type(permit[key]) is type(completion.get(key)) and
+                permit[key] == completion[key], 'Recovery tuple differs: ' + key)
+    require(type(permit['pr_number']) is int and permit['pr_number'] > 0 and
+            type(permit['execution_id']) is str and
+            re.fullmatch('[0-9a-f-]{36}', permit['execution_id']) and
+            all(type(permit[k]) is str and re.fullmatch('[0-9a-f]{40}', permit[k])
+                for k in ['head_sha', 'base_sha']) and
+            type(permit['result_sha256']) is str and
+            re.fullmatch('[0-9a-f]{64}', permit['result_sha256']), 'Malformed recovery tuple')
+    for key in ['original_publisher_run_id', 'trigger_run_id']:
+        require(type(permit.get(key)) is str and re.fullmatch('[1-9][0-9]*', permit[key]),
+                'Malformed recovery run identity')
+    require(permit['original_publisher_run_id'] != permit['trigger_run_id'],
+            'Recovery producer identities collide')
+    return permit
+
+
+def receipt_source_binding(binding, run, revision, value, name, workflow):
+    """Authenticate frozen producers separately; never execute their old source."""
+    permit = binding.get('publication_recovery')
+    if type(permit) is not dict or str(run.get('id')) not in [
+            permit.get('original_publisher_run_id'), permit.get('trigger_run_id')]:
+        return binding
+    trigger = str(run['id']) == permit['trigger_run_id']
+    eid = permit['execution_id']
+    if trigger:
+        # These are the only historical trigger receipts needed for recovery.
+        names = ['preloop-trigger-' + eid, 'preloop-event-' + permit['trigger_run_id'],
+                 'preloop-intent-' + str(permit['pr_number']) + '-' +
+                 permit['head_sha'] + '-' + permit['base_sha']]
+        require(workflow == 'preloop-review-trigger.yml' and name in names and
+                str(value.get('trigger_run_id')) == permit['trigger_run_id'] and
+                value.get('execution_id', eid) == eid,
+                'Wrong historical trigger receipt')
+        scope = dict(value, execution_id=eid, result_sha256=permit['result_sha256'])
+    else:
+        require(workflow == 'preloop-review-publish.yml' and name == 'preloop-wake-' + eid and
+                str(value.get('authenticated_run_id')) == permit['original_publisher_run_id'],
+                'Wrong historical completion receipt')
+        scope = value.get('completion', {})
+    recovery_scope(binding, scope)
+    require(run.get('repository', {}).get('id') == binding['repository_id'] and
+            run.get('status') == 'completed' and
+            run.get('conclusion') == ('success' if trigger else 'failure') and
+            str(run.get('run_attempt')) == '1', 'Historical producer outcome differs')
+    historical = permit.get('historical_sources')
+    require(type(historical) is dict and historical.get('workflow_sha') == revision and
+            value.get('workflow_sha') == revision and
+            type(revision) is str and re.fullmatch('[0-9a-f]{40}', revision),
+            'Wrong historical workflow revision')
+    files, blobs = historical.get('files'), historical.get('git_blobs')
+    require(type(files) is dict and type(blobs) is dict and files and
+            set(files) == set(blobs) == set(binding['approved_files']) -
+                {'.github/preloop/bootstrap.py', '.github/preloop/test_bootstrap.py',
+                 '.github/preloop/finalize.py', '.github/preloop/test_finalize.py',
+                 '.github/preloop/test_trust.py', '.github/workflows/preloop-review-finalize.yml'} and
+            all(type(k) is str and k.startswith('.github/') and '..' not in Path(k).parts and
+                type(v) is str and re.fullmatch('[0-9a-f]{64}', v) and
+                type(blobs[k]) is str and re.fullmatch('[0-9a-f]{40}', blobs[k])
+                for k, v in files.items()), 'Incomplete historical source manifest')
+    return dict(binding, approved_files=files, approved_blobs=blobs)
+
+
 def artifact(github, binding, name, workflow, allow_failed=False, run_id=None, allow_current=False):
     path = '/repos/' + binding['repository']
     items = github_pages(github, path + '/actions/artifacts?name=' + urllib.parse.quote(name), 'artifacts')
@@ -235,14 +320,25 @@ def artifact(github, binding, name, workflow, allow_failed=False, run_id=None, a
             revision = trust.trigger_workflow_sha(run, value, binding, value['head_sha'])
             require(str(value['trigger_run_id']) == str(run['id']), 'Trigger artifact run mismatch')
         else:
-            require(run['event'] in ['repository_dispatch', 'workflow_dispatch'] and
+            finalizer = workflow == 'preloop-review-finalize.yml'
+            require(run['event'] in (['workflow_run'] if finalizer else
+                                    ['repository_dispatch', 'workflow_dispatch']) and
                     run['head_branch'] == binding['default_branch'], 'Untrusted completion run')
             revision = run['head_sha']
             jobs = github_pages(github, path + '/actions/runs/' + str(run['id']) + '/jobs', 'jobs')
-            auth = [job for job in jobs if job['name'] == 'Authenticate completion' and
-                    job['conclusion'] == 'success']
+            if finalizer:
+                require(binding.get('publication_finalizer', {}).get('explicit_posture_approval') is True,
+                        'Finalizer receipt is not admitted')
+                auth = [job for job in jobs if job['name'] == 'Finalize Preloop review' and
+                        all(any(step.get('name') == name and step.get('conclusion') == 'success'
+                                for step in job.get('steps', [])) for name in
+                            ['Prepare completed publisher finalization', 'Preserve finalization intent'])]
+            else:
+                auth = [job for job in jobs if job['name'] == 'Authenticate completion' and
+                        job['conclusion'] == 'success']
             require(len(auth) == 1, 'Completion authentication job did not succeed')
-        trust.verify_sources(github, binding, revision, list(binding['approved_files']))
+        sources = receipt_source_binding(binding, run, revision, value, name, workflow)
+        trust.verify_sources(github, sources, revision, list(sources['approved_files']))
         matches.append(value)
     require(matches and all(value == matches[0] for value in matches), 'Missing or conflicting receipt')
     return matches[0]
@@ -266,7 +362,8 @@ def record_trigger_event():
     write_receipt(root / 'preloop-event', dict(intent, event_name=name, event_action=action))
 
 
-def completed_publication(github, binding, run_id, execution_id, pr_number, head, base):
+def completed_publication(github, binding, run_id, execution_id, pr_number, head, base,
+                          pending=False):
     """Read-only final acceptance, called AFTER the actual publisher run ends.
 
     The caller supplies a live verified authority binding and a repository-bound
@@ -334,21 +431,43 @@ def completed_publication(github, binding, run_id, execution_id, pr_number, head
             hashlib.sha256((review.get('body') or '').encode('utf-8')).hexdigest() ==
                 receipt.get('review_body_sha256'), 'Final review readback changed')
     check = github(root + '/check-runs/' + str(receipt['check_id']))
+    finalizer_run_id, gate_url = None, run_url
+    if not pending and binding.get('publication_finalizer'):
+        pattern = r'<!-- briar-preloop-finalized:' + str(run_id) + r':([1-9][0-9]*):' + receipt['claim_sha256'] + r' -->'
+        finalizers = re.findall(pattern, check.get('output', {}).get('text') or '')
+        require(len(finalizers) == 1, 'Missing unique authenticated finalization')
+        finalizer_run_id = finalizers[0]
+        gate_url = 'https://github.com/' + binding['repository'] + '/actions/runs/' + finalizer_run_id
     require(check.get('id') == receipt['check_id'] and check.get('head_sha') == head and
-            check.get('name') == 'Preloop review' and check.get('status') == 'completed' and
-            check.get('conclusion') == state and check.get('details_url') == run_url and
+            check.get('name') == 'Preloop review' and
+            check.get('status') == ('in_progress' if pending else 'completed') and
+            check.get('conclusion') == (None if pending else state) and check.get('details_url') == gate_url and
             check.get('app', {}).get('slug') == 'github-actions' and
             check.get('external_id') == 'briar-preloop:' + receipt['claim_sha256'],
             'Final check readback changed')
     statuses = github_pages(github, root + '/commits/' + head + '/statuses')
     latest = next((row for row in statuses if row.get('context') == 'Preloop review'), None)
-    require(latest and latest.get('id') == receipt['status_id'] and
-            latest.get('state') == state and latest.get('target_url') == run_url and
+    require(latest and (bool(finalizer_run_id) or latest.get('id') == receipt['status_id']) and
+            latest.get('state') == ('pending' if pending else state) and latest.get('target_url') == gate_url and
             latest.get('creator', {}).get('login') == 'github-actions[bot]',
             'Latest review status no longer matches the publication')
+    if not pending and binding.get('publication_finalizer'):
+        intent = artifact(github, binding, 'preloop-finalize-' + execution_id + '-' + str(run_id),
+                          'preloop-review-finalize.yml', allow_failed=True, run_id=finalizer_run_id)
+        require(intent.get('publisher_run_id') == str(run_id) and
+                intent.get('finalizer_run_id') == finalizer_run_id and
+                intent.get('publication_receipt') == receipt,
+                'Finalization intent differs from the completed publisher')
     current_pr(github, binding, pr_number, head, base)
-    return {'delivery_verified': True, 'actions_run_verified': True,
-            'actions_check_verified': state == 'success', 'review_approved': state == 'success',
+    historical = historical_target(binding, pr_number, head, base)
+    require(receipt.get('historical_target_sha') == historical,
+            'Historical recovery target receipt differs')
+    return {'delivery_verified': not pending, 'actions_run_verified': True,
+            'actions_check_verified': not pending and state == 'success',
+            'review_approved': not pending and state == 'success' and historical is None,
+            'historical_target_sha': historical,
+            **({'publication_receipt': receipt} if pending else {}),
+            'finalizer_run_id': finalizer_run_id,
             'review_state': state, 'review_verdict': receipt['review_verdict'], 'execution_id': execution_id,
             'head_sha': head, 'base_sha': base, 'review_url': receipt['review_url'],
             'actions_run_url': run_url}
