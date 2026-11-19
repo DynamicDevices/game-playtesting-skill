@@ -198,7 +198,7 @@ class CompletedPublicationTests(unittest.TestCase):
                             review_body_sha256=hashlib.sha256(self.body.encode()).hexdigest())
         self.jobs = [dict(id=n, name=name, run_id=12, head_sha=self.code,
                           status='completed', conclusion='success') for n, name in
-                     [(1, 'Authenticate completion'), (2, 'Preloop review')]]
+                     [(1, 'Authenticate completion'), (2, 'Publish validated Preloop review')]]
         self.jobs[1]['steps'] = [dict(name=name, status='completed', conclusion='success') for name in
             ['Validate, publish and independently read back', 'Preserve actual publication receipt']]
         self.review = dict(id=22, commit_id=self.head, state='COMMENTED', submitted_at='now',

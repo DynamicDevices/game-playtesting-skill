@@ -162,6 +162,32 @@ been independently read back, including the current publication-run link.
 
 ## Signed policy and remaining acceptance work
 
+The delivery target is a real PR event, an independent Preloop review, passing
+required CI, and automatic merge for explicitly admitted ordinary Briar PRs.
+Failed, incomplete, placeholder or stale reviews block merging; a skipped job
+is not approval. Trust/security changes retain their specific approval. A
+bootstrap exception must be separately explicit, not inferred from a red check.
+
+Automatic merge requires the distinct `Preloop merge gate` context, not just
+the preliminary `Preloop review` records. The trigger sets it pending before
+launch. A trusted completion workflow releases it only after the actual finalizer
+is completed/successful, its exact source and durable intent are authenticated,
+the complete review/bot/check/status are independently read back, the PR remains
+current and no newer execution supersedes it. Failed/cancelled/interrupted
+finalizers cannot release it. The publisher job has a separate name,
+`Publish validated Preloop review`, to avoid colliding with its custom check.
+The merge-gate workflow receives status-write permission, not source-write or
+merge permission. GitHub's native auto-merge still requires applicable CI.
+Enable this route only with exact signed `publication_merge_gate` admission,
+the fourth workflow in live-revocation bindings and actual required-check rules.
+
+Commit-status publication performs one POST and independent combined/list
+readbacks. If exactly one endpoint lacks the posted ID or shows an older ID,
+while the other proves the exact write, it may perform one additional list then
+combined observation. Wrong commit/actor, malformed IDs, same-ID conflicts and
+visibly newer writes are not retryable. Final ID, commit, context, state, run
+URL and actor agreement remains mandatory. There is no sleep, loop or rePOST.
+
 `PRELOOP_PUBLICATION_AUTHORITY` and `PRELOOP_PUBLICATION_SIGNATURE` must preserve
 exact signed bytes. `install_policy.py` writes them only to runner-local files.
 The policy must bind repository/provider/project/principal, flow/model/config,

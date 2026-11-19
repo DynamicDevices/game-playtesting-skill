@@ -180,7 +180,7 @@ class RuntimeTests(unittest.TestCase):
                     with self.assertRaises(InvalidReview) as caught:
                         runtime.commit_status(github, self.binding, 'a' * 40, 'success', url, 'Reviewed')
                 self.assertEqual(str(caught.exception), 'Commit status readback mismatch: ' + expected)
-                self.assertEqual(calls, ['POST'] + ['GET'] * (4 if changed == 'listed_id' else 2))
+                self.assertEqual(calls, ['POST', 'GET', 'GET'])
                 self.assertNotIn('untrusted-sensitive-value', str(caught.exception))
 
     def test_status_reconciles_missing_or_stale_list_without_reposting(self):
@@ -228,6 +228,64 @@ class RuntimeTests(unittest.TestCase):
                     runtime.commit_status(github, self.binding, 'a' * 40, 'success', url, 'Reviewed')
                 self.assertEqual(calls.count('POST'), 1)
                 self.assertLessEqual(len(calls), 5)
+
+    def test_status_reconciles_combined_lag_only_when_list_already_proves_write(self):
+        url = 'https://github.com/example/repository/actions/runs/12'
+        for state in ['pending', 'success', 'failure', 'error']:
+            status = dict(id=9, context='Preloop review', state=state, target_url=url,
+                          creator={'login': 'github-actions[bot]'})
+            exact = dict(sha='a' * 40, statuses=[dict(status)])
+            for stale in [[], [dict(status, id=8, state='error', target_url='old')]]:
+                calls = []
+                responses = iter([status, dict(exact, statuses=stale), [status], [status], exact])
+                def github(path, method='GET', body=None):
+                    calls.append((path, method))
+                    return next(responses)
+                with self.subTest(state=state, stale=stale), patch.dict(os.environ, GITHUB_RUN_ID='12'):
+                    self.assertEqual(runtime.commit_status(github, self.binding, 'a' * 40,
+                                     state, url, 'Reviewed'), status)
+                self.assertEqual([m for _, m in calls], ['POST', 'GET', 'GET', 'GET', 'GET'])
+                self.assertTrue(calls[-2][0].endswith('/statuses?per_page=100'))
+                self.assertTrue(calls[-1][0].endswith('/status'))
+
+    def test_status_combined_reconciliation_rejects_conflicts_and_dual_lag(self):
+        url = 'https://github.com/example/repository/actions/runs/12'
+        status = dict(id=9, context='Preloop review', state='success', target_url=url,
+                      creator={'login': 'github-actions[bot]'})
+        exact = dict(sha='a' * 40, statuses=[dict(status)])
+        cases = [([], [], 3),
+                 ([dict(status, id=8)], [dict(status, id=8)], 3),
+                 ([dict(status, id=10)], [status], 3),
+                 ([dict(status, id='8')], [status], 3),
+                 ([dict(status, id=True)], [status], 3),
+                 ([dict(status, state='pending')], [status], 3),
+                 ([dict(status, target_url='wrong')], [status], 3),
+                 ([], [dict(status, creator={'login': 'other'})], 3)]
+        for combined_rows, listed, expected_calls in cases:
+            calls = []
+            responses = iter([status, dict(exact, statuses=combined_rows), listed])
+            def github(_path, method='GET', body=None):
+                calls.append(method)
+                return next(responses)
+            with self.subTest(combined_rows=combined_rows, listed=listed), patch.dict(os.environ, GITHUB_RUN_ID='12'), self.assertRaises(InvalidReview):
+                runtime.commit_status(github, self.binding, 'a' * 40, 'success', url, 'Reviewed')
+            self.assertEqual(len(calls), expected_calls)
+
+    def test_status_combined_reconciliation_must_converge_without_supersession(self):
+        url = 'https://github.com/example/repository/actions/runs/12'
+        status = dict(id=9, context='Preloop review', state='success', target_url=url,
+                      creator={'login': 'github-actions[bot]'})
+        exact = dict(sha='a' * 40, statuses=[dict(status)])
+        for final in [dict(exact, statuses=[]), dict(exact, statuses=[dict(status, id=10)]),
+                      dict(exact, sha='b' * 40), dict(exact, statuses=[dict(status, state='pending')])]:
+            calls = []
+            responses = iter([status, dict(exact, statuses=[]), [status], [status], final])
+            def github(_path, method='GET', body=None):
+                calls.append(method)
+                return next(responses)
+            with self.subTest(final=final), patch.dict(os.environ, GITHUB_RUN_ID='12'), self.assertRaises(InvalidReview):
+                runtime.commit_status(github, self.binding, 'a' * 40, 'success', url, 'Reviewed')
+            self.assertEqual(calls, ['POST', 'GET', 'GET', 'GET', 'GET'])
 
     def test_status_reconciliation_does_not_retry_wrong_actor_or_same_record_conflicts(self):
         url = 'https://github.com/example/repository/actions/runs/12'

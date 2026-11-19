@@ -59,6 +59,22 @@ class LiveRevocationTests(unittest.TestCase):
                 self.verify()
             self.workflows[key]['state'] = 'active'
 
+    def test_merge_admission_requires_all_four_active_exact_workflows(self):
+        self.binding.update(publication_finalizer={'explicit_posture_approval': True},
+                            publication_merge_gate=copy.deepcopy(runtime.trust.MERGE_GATE))
+        for offset, name in enumerate(['preloop-review-finalize.yml', 'preloop-review-merge.yml'], 102):
+            self.names[name] = offset
+            self.binding['live_revocation']['workflow_paths'][name] = '.github/workflows/' + name
+            self.workflows[name] = dict(id=offset, state='active', path='.github/workflows/' + name)
+        self.workload['event_name'] = 'workflow_run'
+        self.run.update(event='workflow_run', workflow_id=103)
+        runtime.verify_live_service(self.binding, self.workload, 'preloop-review-merge.yml')
+        for name in self.workflows:
+            self.workflows[name]['state'] = 'disabled_manually'
+            with self.subTest(workflow=name), self.assertRaises(InvalidReview):
+                runtime.verify_live_service(self.binding, self.workload, 'preloop-review-merge.yml')
+            self.workflows[name]['state'] = 'active'
+
     def test_pr_target_uses_signed_base_workload_not_api_branch_label(self):
         self.pr_target()
         self.verify_trigger()

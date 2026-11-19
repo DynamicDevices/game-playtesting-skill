@@ -105,6 +105,25 @@ class TriggerTests(unittest.TestCase):
                                      {'pr_number': 7, 'head_sha': 'a' * 40}),
                                     ('/flows/executions/execution', 'GET', None)])
 
+    def test_merge_gate_is_pending_before_any_paid_launch(self):
+        self.binding['publication_merge_gate'] = copy.deepcopy(runtime.trust.MERGE_GATE)
+        self.store_intent()
+        def check_status(*args, **kwargs):
+            if kwargs.get('context_name') == 'Preloop merge gate':
+                self.assertEqual(self.calls, [])
+                self.assertEqual(args[3], 'pending')
+        runtime.commit_status.side_effect = check_status
+        trigger.start()
+        self.assertEqual(runtime.commit_status.call_count, 2)
+
+    def test_unconfirmed_merge_gate_pending_prevents_paid_launch(self):
+        self.binding['publication_merge_gate'] = copy.deepcopy(runtime.trust.MERGE_GATE)
+        self.store_intent()
+        runtime.commit_status.side_effect = InvalidReview('Pending status readback failed')
+        with self.assertRaises(InvalidReview):
+            trigger.start()
+        self.assertEqual(self.calls, [])
+
     def test_workflow_observes_startup_even_when_launch_step_failed_after_acceptance(self):
         workflow = Path(__file__).resolve().parents[1] / 'workflows/preloop-review-trigger.yml'
         self.assertIn("      - name: Validate native startup once\n"

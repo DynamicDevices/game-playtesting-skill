@@ -182,10 +182,64 @@ def release():
         raise
 
 
+def accept():
+    """Release merge admission only AFTER the real finalizer completed.
+
+    This status is a separate required GitHub context. Earlier green review
+    records cannot release it, even if finalization is cancelled after writing.
+    The reviewer/finalizer never receives source or merge-write privileges.
+    """
+    binding, _, github = runtime.context('preloop-review-merge.yml')
+    require(binding.get('publication_merge_gate') == runtime.trust.MERGE_GATE,
+            'Merge gate not explicitly admitted')
+    require(os.environ.get('GITHUB_RUN_ATTEMPT') == '1', 'Merge admission retry requires reconciliation')
+    event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+    require(os.environ['GITHUB_EVENT_NAME'] == 'workflow_run' and event.get('action') == 'completed' and
+            event.get('repository', {}).get('id') == binding['repository_id'], 'Wrong merge-gate event')
+    hinted = event.get('workflow_run', {})
+    finalizer_id = hinted.get('id')
+    require(type(finalizer_id) is int and finalizer_id > 0 and
+            hinted.get('path', '').split('@')[0] == '.github/workflows/' + WORKFLOW,
+            'Wrong finalizer completion hint')
+    root = '/repos/' + binding['repository']
+    run = github(root + '/actions/runs/' + str(finalizer_id))
+    require(run.get('id') == finalizer_id and run.get('repository', {}).get('id') == binding['repository_id'] and
+            run.get('path', '').split('@')[0] == '.github/workflows/' + WORKFLOW and
+            run.get('head_branch') == binding['default_branch'] and run.get('event') == 'workflow_run' and
+            run.get('status') == 'completed' and run.get('conclusion') == 'success' and
+            run.get('run_attempt') == 1, 'Finalizer did not complete successfully')
+    rows = runtime.github_pages(github, root + '/actions/runs/' + str(finalizer_id) + '/artifacts', 'artifacts')
+    intents = [row for row in rows if re.fullmatch(
+        r'preloop-finalize-[0-9a-f-]{36}-[1-9][0-9]*', row.get('name', ''))]
+    require(len(intents) == 1 and not intents[0].get('expired'), 'Missing unique finalization intent')
+    intent = runtime.artifact(github, binding, intents[0]['name'], WORKFLOW, run_id=str(finalizer_id))
+    receipt, completion = intent['publication_receipt'], intent['completion']
+    publisher_id = intent['publisher_run_id']
+    require(intent.get('finalizer_run_id') == str(finalizer_id) and
+            intents[0]['name'] == intent_name(publisher_id, receipt) and
+            all(receipt.get(k) == completion.get(k) for k in
+                ['execution_id', 'head_sha', 'base_sha', 'result_sha256']) and
+            completion.get('status') == 'SUCCEEDED' and completion.get('result_ready') is True,
+            'Finalization completion binding changed')
+    eid, number, head, base = (completion[k] for k in ['execution_id', 'pr_number', 'head_sha', 'base_sha'])
+    proof = runtime.completed_publication(github, binding, publisher_id, eid, number, head, base)
+    require(all(proof.get(k) is True for k in
+                ['delivery_verified', 'actions_run_verified', 'actions_check_verified', 'review_approved']) and
+            proof.get('finalizer_run_id') == str(finalizer_id) and proof.get('review_state') == 'success',
+            'Completed review does not admit merging')
+    publisher.no_supersession(binding, os.environ['PRELOOP_CI_TOKEN'], completion)
+    runtime.current_pr(github, binding, number, head, base)
+    run_url = 'https://github.com/' + binding['repository'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID']
+    runtime.commit_status(github, binding, head, 'success', run_url,
+        'Completed finalizer, exact review and bot publication verified.', context_name='Preloop merge gate')
+
+
 if __name__ == '__main__':
     if sys.argv[1:] == ['prepare']:
         prepare()
     elif sys.argv[1:] == ['release']:
         release()
+    elif sys.argv[1:] == ['accept']:
+        accept()
     else:
         raise SystemExit('Unknown finalization phase')

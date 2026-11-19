@@ -52,7 +52,7 @@ jobs:
           if-no-files-found: error
           retention-days: 31
   publish:
-    name: Preloop review
+    name: Publish validated Preloop review
     needs: authenticate
     concurrency:
       group: preloop-publish-${{ github.repository }}-${{ needs.authenticate.outputs.pr_number }}

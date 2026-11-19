@@ -85,7 +85,7 @@ def main():
     require(args in [['publisher', 'authenticate'], ['publisher', 'publish'],
                      ['publisher', 'late-failure'], ['trigger', 'prepare'],
                      ['trigger', 'start'], ['trigger', 'startup'], ['finalize', 'prepare'],
-                     ['finalize', 'release'], ['event']], 'Unknown entry point')
+                     ['finalize', 'release'], ['finalize', 'accept'], ['event']], 'Unknown entry point')
     files = verified_sources(Path.cwd())
     with tempfile.TemporaryDirectory(prefix='preloop-verified-') as folder:
         stage = Path(folder)
