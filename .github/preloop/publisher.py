@@ -47,7 +47,7 @@ def no_supersession(binding, token, completion):
                     'A newer or ambiguously ordered review supersedes this result')
 
 
-def owned_receipts(github, binding, eid):
+def owned_receipts(github, binding, eid, allow_failed_trigger=False):
     """The error path must prove the same durable ownership as review publication."""
     require(re.fullmatch('[0-9a-f-]{36}', eid), 'Invalid execution ID')
     wake = runtime.artifact(github, binding, 'preloop-wake-' + eid,
@@ -56,14 +56,14 @@ def owned_receipts(github, binding, eid):
     completion = wake['completion']
     require(completion['execution_id'] == eid, 'Wrong authenticated wake')
     receipt = runtime.artifact(github, binding, 'preloop-trigger-' + eid,
-                               'preloop-review-trigger.yml')
+                               'preloop-review-trigger.yml', allow_failed=allow_failed_trigger)
     # Applies to BOTH review publication and the error-status fallback. A
     # diagnostic cannot overwrite the PR gate, even if its model claims pass.
     require('diagnostic_rerun' not in receipt,
             'Diagnostic reproduction is not eligible for PR review/status publication')
     name = 'preloop-intent-' + str(receipt['pr_number']) + '-' + receipt['head_sha'] + '-' + receipt['base_sha']
     intent = runtime.artifact(github, binding, name, 'preloop-review-trigger.yml',
-                              run_id=receipt['trigger_run_id'])
+                              run_id=receipt['trigger_run_id'], allow_failed=allow_failed_trigger)
     require(receipt['model_id'] == binding['model_id'] and
             receipt['flow_config_sha256'] == binding['native_ci_contract']['flow_config_sha256'],
             'Native model/configuration differs from signed policy')
@@ -262,7 +262,9 @@ def publish_error_status():
     """An error needs authenticated target/ownership, never an invented clean review."""
     binding, _workload, github = runtime.context('preloop-review-publish.yml')
     eid = os.environ['PRELOOP_EXECUTION_ID']
-    completion, intent, receipt = owned_receipts(github, binding, eid)
+    # Failed/incomplete trigger evidence can establish ownership for failure
+    # cleanup only. The normal publication path never opts into this exception.
+    completion, intent, receipt = owned_receipts(github, binding, eid, allow_failed_trigger=True)
     detail = runtime.preloop('/flows/executions/' + eid, os.environ['PRELOOP_CI_TOKEN'])
     bind_owned_execution(completion, intent, receipt, detail)
     no_supersession(binding, os.environ['PRELOOP_CI_TOKEN'], completion)

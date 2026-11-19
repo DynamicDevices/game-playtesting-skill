@@ -37,6 +37,12 @@ def producer(github, binding):
                 ['execution_id', 'head_sha', 'base_sha', 'result_sha256']) and
             completion.get('status') == 'SUCCEEDED' and completion.get('result_ready') is True,
             'Publication and authenticated completion differ')
+    trigger = runtime.artifact(github, binding, 'preloop-trigger-' + eid,
+                               'preloop-review-trigger.yml')
+    require(all(trigger.get(k) == completion.get(k) for k in
+                ['execution_id', 'pr_number', 'head_sha', 'base_sha']) and
+            trigger.get('execution_id') == eid,
+            'Successful trigger and publication differ')
     number, head, base = completion['pr_number'], completion['head_sha'], completion['base_sha']
     evidence = runtime.completed_publication(github, binding, str(run_id), eid, number, head, base, pending=True)
     require(evidence['publication_receipt'] == receipt, 'Producer receipt changed')

@@ -41,6 +41,7 @@ class PublisherTests(unittest.TestCase):
         self.reviews, self.checks, self.statuses, self.calls = [], [], [], []
         self.preloop_calls = []
         self.result_failure = None
+        self.failed_trigger = False
         self.history = [self.detail]
         self.fail_review = False
         self.fail_check = False
@@ -104,6 +105,8 @@ class PublisherTests(unittest.TestCase):
         raise AssertionError('Unexpected fake API route: ' + path)
 
     def artifacts(self, _github, _binding, name, _workflow, **_kwargs):
+        if _workflow == 'preloop-review-trigger.yml' and self.failed_trigger and not _kwargs.get('allow_failed'):
+            raise InvalidReview('Artifact workflow has not completed successfully')
         if name.startswith('preloop-wake-'):
             return {'completion': self.completion,
                     'authenticated_run_id': _kwargs.get('run_id', os.environ['GITHUB_RUN_ID'])}
@@ -146,6 +149,20 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(self.statuses[0]['state'], 'success')
         self.assertEqual(self.checks[0]['conclusion'], 'success')
         self.assertIn(self.eid, self.reviews[0]['body'])
+
+    def test_failed_trigger_blocks_review_but_allows_owned_error_cleanup(self):
+        # Even a complete, valid later controller result cannot erase a failed
+        # startup workflow. Only the failure-status path admits its receipts.
+        self.failed_trigger = True
+        with self.assertRaisesRegex(InvalidReview, 'not completed successfully'):
+            self.run_publisher()
+        self.assertFalse(self.reviews)
+        self.assertFalse(self.checks)
+        self.assertFalse(self.preloop_calls)
+        self.run_publisher(entry=publisher.publish_error_status)
+        self.assertEqual([row['state'] for row in self.statuses], ['error'])
+        self.assertFalse(self.reviews)
+        self.assertFalse(self.checks)
 
     def test_github_normalized_get_reuses_review_and_check_after_readback_failure(self):
         self.normalize_check_url = True

@@ -342,6 +342,18 @@ class TriggerTests(unittest.TestCase):
             trigger.startup()
         self.assertEqual(len(self.calls), 1)
 
+    def test_startup_version_requires_an_integer_not_an_equal_boolean_or_float(self):
+        self.store_receipt()
+        for value in (True, 1.0, "1", None):
+            with self.subTest(version=value):
+                self.detail['startup_receipt']['version'] = value
+                with self.assertRaises(InvalidReview):
+                    trigger.startup()
+                (Path(self.temp.name) / 'preloop-startup/receipt.json').unlink()
+        self.detail['startup_receipt']['version'] = 1
+        trigger.startup()
+        self.assertEqual(len(self.calls), 5)
+
     def test_startup_rejects_missing_or_revoked_proof(self):
         self.store_receipt()
         original = copy.deepcopy(self.detail['startup_receipt'])

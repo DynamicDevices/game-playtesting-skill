@@ -53,7 +53,8 @@ def bind_completed_review(completion, intent, receipt, execution, artifact, diff
     startup = execution.get("startup_receipt")
     require(execution.get("startup_receipt_status") in (None, "recorded"),
             "Controller startup receipt is not recorded at completion")
-    require(type(startup) is dict and startup.get("version") == 1 and
+    require(type(startup) is dict and type(startup.get("version")) is int and
+            startup["version"] == 1 and
             startup.get("executor") == "hosted" and
             startup.get("lease_revoked") is True and
             startup.get("checkout_verified") is True and

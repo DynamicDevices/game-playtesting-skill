@@ -372,9 +372,20 @@ def artifact(github, binding, name, workflow, allow_failed=False, run_id=None, a
                 'Artifact came from another workflow')
         current = allow_current and str(run['id']) == os.environ['GITHUB_RUN_ID']
         trigger = workflow == 'preloop-review-trigger.yml'
-        require(current or (trigger and run['status'] in ['in_progress', 'completed']) or
+        require(current or (trigger and allow_failed and run['status'] in ['in_progress', 'completed']) or
                 (run['status'] == 'completed' and (allow_failed or run['conclusion'] == 'success')),
                 'Artifact workflow has not completed successfully')
+        if trigger and not allow_failed:
+            # A later controller proof must not erase a failed initial startup
+            # observation. Pending startup may pass that observation, but the
+            # completed result still has to prove checkout/setup/agent startup.
+            jobs = github_pages(github, path + '/actions/runs/' + str(run['id']) + '/jobs', 'jobs')
+            startup = [job for job in jobs if job.get('name') == 'trigger' and
+                       job.get('conclusion') == 'success' and
+                       any(step.get('name') == 'Validate native startup once' and
+                           step.get('conclusion') == 'success'
+                           for step in job.get('steps', []))]
+            require(len(startup) == 1, 'Trigger startup validation did not succeed')
         value = trust.download_trigger_artifact(binding['repository'], item['id'], os.environ['GH_TOKEN'])
         if workflow == 'preloop-review-trigger.yml':
             revision = trust.trigger_workflow_sha(run, value, binding, value['head_sha'])

@@ -218,6 +218,18 @@ Queued/failed executions do not count as running. No sleep loop, polling or
 automatic re-trigger compensates for startup timing. A live queued observation
 remains a failed startup gate requiring phase diagnosis, not successful delivery.
 
+Review publication additionally requires the exact trigger workflow to have
+completed successfully, including its `Validate native startup once` step.
+A later valid controller result cannot erase a failed, cancelled, skipped or
+unfinished trigger. The finalizer independently rechecks that trigger and its
+execution/PR/head/base binding before releasing the review gate. Explicitly
+pending startup remains permitted by the initial observation only when the
+completed result later supplies the full startup and cleanup proof. If completion
+arrives before the trigger finishes, publication fails closed; recover publication
+against the existing result after diagnosis, without another inference run.
+Only owned failure-status cleanup may read failed or still-running trigger
+receipts; it cannot publish a review or a successful gate.
+
 Bootstrap also needs resolution: GitHub dispatch workflows must already be on
 the default branch, but independent Preloop review is required before installation.
 The selected project grant permits bootstrap installation only after Alex's

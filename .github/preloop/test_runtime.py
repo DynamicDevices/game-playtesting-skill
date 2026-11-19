@@ -232,7 +232,11 @@ class RuntimeTests(unittest.TestCase):
                    status='completed', conclusion='success')
         row = dict(id=1, name='preloop-trigger-execution', expired=False,
                    workflow_run={'id': 10})
-        with patch.object(runtime, 'github_pages', return_value=[row]), \
+        jobs = [dict(name='trigger', conclusion='success', steps=[
+            dict(name='Validate native startup once', conclusion='success')])]
+        def pages(_github, _path, field):
+            return jobs if field == 'jobs' else [row]
+        with patch.object(runtime, 'github_pages', side_effect=pages), \
              patch.object(trust, 'download_trigger_artifact', return_value=receipt), \
              patch.object(trust, 'verify_sources') as sources, \
              patch.dict(os.environ, GH_TOKEN='fixture'):
@@ -243,6 +247,47 @@ class RuntimeTests(unittest.TestCase):
             receipt['workflow_sha'] = head
             with self.assertRaises(InvalidReview):
                 runtime.artifact(github, binding, row['name'], 'preloop-review-trigger.yml')
+
+    def test_trigger_artifact_requires_completed_success_and_successful_startup_step(self):
+        row = dict(id=1, name='preloop-trigger-execution', expired=False, workflow_run={'id': 10})
+        run = dict(id=10, path='.github/workflows/preloop-review-trigger.yml',
+                   status='completed', conclusion='success')
+        receipt = dict(trigger_run_id='10', head_sha='a' * 40)
+        job = dict(name='trigger', conclusion='success', steps=[
+            dict(name='Validate native startup once', conclusion='success')])
+        jobs = [job]
+        def pages(_github, _path, field):
+            return jobs if field == 'jobs' else [row]
+        with patch.object(runtime, 'github_pages', side_effect=pages), \
+             patch.object(trust, 'download_trigger_artifact', return_value=receipt), \
+             patch.object(trust, 'trigger_workflow_sha', return_value='b' * 40), \
+             patch.object(runtime, 'receipt_source_binding', return_value=dict(self.binding, approved_files={})), \
+             patch.object(trust, 'verify_sources'), patch.dict(os.environ, GH_TOKEN='fixture'):
+            def read(**kwargs):
+                return runtime.artifact(lambda _path: run, self.binding, row['name'],
+                                        'preloop-review-trigger.yml', **kwargs)
+            self.assertEqual(read(), receipt)
+            for state, conclusion in [('in_progress', None), ('queued', None),
+                                      ('completed', 'failure'), ('completed', 'cancelled'),
+                                      ('completed', 'timed_out'), ('completed', 'skipped'),
+                                      ('completed', None)]:
+                with self.subTest(state=state, conclusion=conclusion):
+                    run.update(status=state, conclusion=conclusion)
+                    with self.assertRaisesRegex(InvalidReview, 'not completed successfully'):
+                        read()
+            # The explicit cleanup-only caller may still establish ownership
+            # for failed/in-progress runs. It does not publish a review/pass.
+            for state in ['completed', 'in_progress']:
+                run.update(status=state, conclusion='failure' if state == 'completed' else None)
+                self.assertEqual(read(allow_failed=True), receipt)
+            run.update(status='completed', conclusion='success')
+            bad_jobs = [[], [dict(job, conclusion='failure')],
+                        [dict(job, name='another job')], [dict(job, steps=[])], [job, job]]
+            bad_jobs += [[dict(job, steps=[dict(name='Validate native startup once', conclusion=value)])]
+                         for value in ['failure', 'cancelled', 'skipped', None]]
+            for jobs in bad_jobs:
+                with self.subTest(jobs=jobs), self.assertRaisesRegex(InvalidReview, 'startup validation'):
+                    read()
 
     def test_source_manifest_batched_tree_and_exact_content_fallback(self):
         source = b'fixed trusted code\n'

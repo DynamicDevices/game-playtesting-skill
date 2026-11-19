@@ -107,6 +107,8 @@ class FinalizerTests(unittest.TestCase):
     def test_producer_requires_authoritative_completed_publication(self):
         name = 'preloop-publication-' + self.receipt['execution_id']
         def artifact(*args, **kwargs):
+            if args[2].startswith('preloop-trigger-'):
+                return self.completion
             return {'completion': self.completion} if args[2].startswith('preloop-wake-') else self.receipt
         with patch.object(finalize.runtime, 'github_pages', return_value=[dict(name=name, expired=False)]), \
              patch.object(finalize.runtime, 'artifact', side_effect=artifact), \
@@ -119,6 +121,8 @@ class FinalizerTests(unittest.TestCase):
         self.receipt['pending_check_mode'] = 'retained_failure'
         name = 'preloop-publication-' + self.receipt['execution_id']
         def artifact(*args, **kwargs):
+            if args[2].startswith('preloop-trigger-'):
+                return self.completion
             return {'completion': self.completion} if args[2].startswith('preloop-wake-') else self.receipt
         with patch.object(finalize.runtime, 'github_pages', return_value=[dict(name=name, expired=False)]), \
              patch.object(finalize.runtime, 'artifact', side_effect=artifact), \
@@ -128,6 +132,31 @@ class FinalizerTests(unittest.TestCase):
             self.assertTrue(verify.call_args.kwargs['pending'])
             verify.side_effect = InvalidReview('Producer receipt or completion invalid')
             with self.assertRaises(InvalidReview): finalize.producer(self.github, self.binding)
+        self.assertFalse(self.calls)
+
+    def test_producer_rechecks_trigger_success_and_exact_publication_target(self):
+        name = 'preloop-publication-' + self.receipt['execution_id']
+        trigger = dict(self.completion)
+        def artifact(*args, **kwargs):
+            if args[2].startswith('preloop-trigger-'):
+                self.assertFalse(kwargs.get('allow_failed', False))
+                if trigger.get('failed'):
+                    raise InvalidReview('Trigger startup validation did not succeed')
+                return trigger
+            return {'completion': self.completion} if args[2].startswith('preloop-wake-') else self.receipt
+        with patch.object(finalize.runtime, 'github_pages', return_value=[dict(name=name, expired=False)]), \
+             patch.object(finalize.runtime, 'artifact', side_effect=artifact), \
+             patch.object(finalize.runtime, 'completed_publication', return_value={'publication_receipt': self.receipt}), \
+             patch.object(finalize.publisher, 'no_supersession'):
+            self.assertEqual(finalize.producer(self.github, self.binding)[0], '12')
+            for key in ['execution_id', 'pr_number', 'head_sha', 'base_sha']:
+                with self.subTest(key=key):
+                    trigger = dict(self.completion, **{key: 'wrong'})
+                    with self.assertRaisesRegex(InvalidReview, 'trigger and publication differ'):
+                        finalize.producer(self.github, self.binding)
+            trigger = dict(self.completion, failed=True)
+            with self.assertRaisesRegex(InvalidReview, 'startup validation'):
+                finalize.producer(self.github, self.binding)
         self.assertFalse(self.calls)
 
     def test_retained_mode_release_is_only_after_durable_own_intent(self):
