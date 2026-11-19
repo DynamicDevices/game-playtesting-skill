@@ -1,0 +1,53 @@
+name: Finalize Preloop review
+
+on:
+  workflow_run:
+    workflows: [Publish Preloop review]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: preloop-finalize-${{ github.repository }}-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    name: Finalize Preloop review
+    if: github.event.workflow_run.head_branch == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      checks: write
+      statuses: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node24
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Load exact signed service authority
+        env:
+          PRELOOP_PUBLICATION_AUTHORITY: ${{ secrets.PRELOOP_PUBLICATION_AUTHORITY }}
+          PRELOOP_PUBLICATION_SIGNATURE: ${{ secrets.PRELOOP_PUBLICATION_SIGNATURE }}
+        run: python3 -I -B .github/preloop/install_policy.py
+      - name: Prepare completed publisher finalization
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRELOOP_CI_TOKEN: ${{ secrets.PRELOOP_CI_TOKEN }}
+        run: python3 -I -B .github/preloop/bootstrap.py finalize prepare
+      - name: Preserve finalization intent
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node24
+        with:
+          name: ${{ steps.prepare.outputs.intent_name }}
+          path: ${{ runner.temp }}/preloop-finalize/receipt.json
+          if-no-files-found: error
+          retention-days: 31
+      - name: Finalize owned review gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRELOOP_CI_TOKEN: ${{ secrets.PRELOOP_CI_TOKEN }}
+        run: python3 -I -B .github/preloop/bootstrap.py finalize release

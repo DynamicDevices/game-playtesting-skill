@@ -40,13 +40,13 @@ jobs:
         env:
           PRELOOP_PUBLICATION_AUTHORITY: ${{ secrets.PRELOOP_PUBLICATION_AUTHORITY }}
           PRELOOP_PUBLICATION_SIGNATURE: ${{ secrets.PRELOOP_PUBLICATION_SIGNATURE }}
-        run: python3 .github/preloop/install_policy.py
+        run: python3 -I -B .github/preloop/install_policy.py
       - name: Prepare the durable trigger intent
         id: prepare
         env:
           GH_TOKEN: ${{ github.token }}
           PRELOOP_CI_TRIGGER_TOKEN: ${{ secrets.PRELOOP_CI_TRIGGER_TOKEN }}
-        run: python3 .github/preloop/trigger.py prepare
+        run: python3 -I -B .github/preloop/bootstrap.py trigger prepare
       - name: Persist intent before launching
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node24
         with:
@@ -55,9 +55,7 @@ jobs:
           if-no-files-found: error
           retention-days: 31
       - name: Record the triggering event action
-        env:
-          PYTHONPATH: .github/preloop
-        run: python3 -c 'import runtime; runtime.record_trigger_event()'
+        run: python3 -I -B .github/preloop/bootstrap.py event
       - name: Preserve triggering event before launch
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node24
         with:
@@ -70,7 +68,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PRELOOP_CI_TRIGGER_TOKEN: ${{ secrets.PRELOOP_CI_TRIGGER_TOKEN }}
-        run: python3 .github/preloop/trigger.py start
+        run: python3 -I -B .github/preloop/bootstrap.py trigger start
       - name: Persist controller binding
         if: always() && steps.start.outputs.execution_id != ''
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node24
@@ -84,7 +82,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PRELOOP_CI_TRIGGER_TOKEN: ${{ secrets.PRELOOP_CI_TRIGGER_TOKEN }}
-        run: python3 .github/preloop/trigger.py startup
+        run: python3 -I -B .github/preloop/bootstrap.py trigger startup
       - name: Preserve the single startup observation
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node24

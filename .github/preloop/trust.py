@@ -56,6 +56,19 @@ def receipt_from_zip(data):
         require(archive.namelist() == ['receipt.json'], 'Unexpected receipt artifact files')
         return strict_json(archive.read('receipt.json'))
 
+def workload_events(binding, workflow):
+    if workflow == 'preloop-review-finalize.yml':
+        require(binding.get('publication_finalizer') == {
+            'explicit_posture_approval': True,
+            'workflow_path': '.github/workflows/preloop-review-finalize.yml',
+            'event': 'workflow_run', 'producer_path': '.github/workflows/preloop-review-publish.yml'},
+            'Missing exact signed finalizer admission')
+        return ['workflow_run']
+    require(workflow in ['preloop-review-publish.yml', 'preloop-review-trigger.yml'], 'Unapproved workflow')
+    return (['repository_dispatch', 'workflow_dispatch'] if workflow == 'preloop-review-publish.yml'
+            else ['pull_request_target', 'workflow_dispatch'])
+
+
 def verify_workload_jwt(token, jwks, binding, repository, run_id, now=None, workflow="preloop-review-publish.yml"):
     import time
     parts = token.split('.')
@@ -94,10 +107,11 @@ def verify_workload_jwt(token, jwks, binding, repository, run_id, now=None, work
             str(claims.get('repository_id')) == str(binding['repository_id']), 'Workload repository mismatch')
     require(str(claims.get('run_id')) == str(run_id), 'Workload run mismatch')
     require(claims.get('ref') == 'refs/heads/' + binding['default_branch'], 'Untrusted workflow branch')
-    require(workflow in ['preloop-review-publish.yml', 'preloop-review-trigger.yml'], 'Unapproved workflow')
+    require(workflow in ['preloop-review-publish.yml', 'preloop-review-trigger.yml',
+                        'preloop-review-finalize.yml'], 'Unapproved workflow')
     expected = repository + '/.github/workflows/' + workflow + '@refs/heads/' + binding['default_branch']
     require(claims.get('workflow_ref') == expected, 'Workload workflow mismatch')
-    events = ['repository_dispatch', 'workflow_dispatch'] if workflow == 'preloop-review-publish.yml' else ['pull_request_target', 'workflow_dispatch']
+    events = workload_events(binding, workflow)
     require(claims.get('event_name') in events, 'Unexpected workload event')
     return claims
 

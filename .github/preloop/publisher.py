@@ -70,7 +70,7 @@ def owned_receipts(github, binding, eid):
     return completion, intent, receipt
 
 
-def initial_check_attempt(github, binding, eid):
+def initial_check_attempt(github, binding, completion, receipt):
     """Use the pre-existing durable authenticated wake as a once-only intent.
 
     The native per-PR job concurrency serializes publishers. Its authentication
@@ -80,12 +80,33 @@ def initial_check_attempt(github, binding, eid):
     """
     require(os.environ.get('GITHUB_RUN_ATTEMPT', '1') == '1',
             'Check creation on a repeated run requires explicit reconciliation')
+    eid = completion['execution_id']
     name = 'preloop-wake-' + eid
     rows = runtime.github_pages(github, '/repos/' + binding['repository'] +
         '/actions/artifacts?name=' + name, 'artifacts')
-    require(len(rows) == 1 and rows[0].get('name') == name and not rows[0].get('expired') and
-            str(rows[0].get('workflow_run', {}).get('id')) == os.environ['GITHUB_RUN_ID'],
+    current = os.environ['GITHUB_RUN_ID']
+    valid = all(row.get('name') == name and not row.get('expired') for row in rows)
+    runs = [str(row.get('workflow_run', {}).get('id')) for row in rows]
+    if valid and runs == [current] and os.environ.get('GITHUB_EVENT_NAME') != 'workflow_dispatch':
+        return
+    require(valid and len(rows) == 2 and len(set(runs)) == 2 and current in runs,
             'Earlier or missing durable publication intent; reconcile before check creation')
+    require(type(binding.get('publication_recovery')) is dict,
+            'Earlier durable publication intent requires signed reconciliation')
+    permit = runtime.recovery_scope(binding, completion)
+    previous = permit['original_publisher_run_id']
+    require(set(runs) == {previous, current} and previous != current and
+            str(receipt.get('trigger_run_id')) == permit['trigger_run_id'],
+            'Durable publication intents differ from the signed reconciliation')
+    event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+    require(os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch' and
+            event.get('inputs') == dict(execution_id=eid, authenticated_run_id=previous),
+            'First-check recovery requires the exact publish-only dispatch')
+    wake = runtime.artifact(github, binding, name, 'preloop-review-publish.yml',
+                            allow_failed=True, run_id=previous)
+    require(wake.get('completion') == completion and
+            str(wake.get('authenticated_run_id')) == previous,
+            'Reconciled completion wake changed')
 
 
 def publish():
@@ -111,6 +132,11 @@ def publish():
     run_url = 'https://github.com/' + binding['repository'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID']
     marker = '<!-- briar-preloop:' + eid + ':' + proof['claim_sha256'] + ' -->'
     body = review_body(proof['result']) + '\nExecution: https://preloop.ai/console/flows/executions/' + eid
+    historical = runtime.historical_target(binding, number, head, base)
+    if historical:
+        body += ('\n\nHistorical review recovery. Reviewed head: ' + head +
+                 '\nOriginal reviewed base: ' + base + '\nCurrent target: ' + historical +
+                 '\nThis publishes the original review, not approval against the advanced target.')
     body += '\n\nResult: ' + proof['state'] + '\n\nPosted by Briar on Alex\'s behalf.\n' + marker
     reviews = runtime.github_pages(github, path + '/reviews')
     execution_marker = '<!-- briar-preloop:' + eid + ':'
@@ -138,7 +164,7 @@ def publish():
     # This genuine check is created by the actual trusted Actions publisher,
     # tied to the reviewed SHA and workflow run, never by a desktop status script.
     if not intents:
-        initial_check_attempt(github, binding, eid)
+        initial_check_attempt(github, binding, completion, receipt)
     check = intents[0] if intents else github(root + '/check-runs', 'POST', {
         'name': 'Preloop review', 'head_sha': head, 'status': 'in_progress', 'details_url': run_url,
         'external_id': 'briar-preloop:' + proof['claim_sha256'],
@@ -156,19 +182,26 @@ def publish():
         runtime.current_pr(github, binding, number, head, base)
         no_supersession(binding, token, completion)
         conclusion = 'success' if proof['state'] == 'success' else 'failure'
-        github(root + '/check-runs/' + str(check['id']), 'PATCH', {
-            'status': 'completed', 'conclusion': conclusion, 'details_url': run_url,
-            'output': {'title': 'Preloop review published', 'summary': readback['html_url'], 'text': marker}})
+        pending = bool(binding.get('publication_finalizer'))
+        update = {'status': 'in_progress' if pending else 'completed', 'details_url': run_url,
+            'output': {'title': 'Review published; awaiting completed Actions' if pending else
+                       'Preloop review published', 'summary': readback['html_url'], 'text': marker}}
+        if not pending:
+            update['conclusion'] = conclusion
+        github(root + '/check-runs/' + str(check['id']), 'PATCH', update)
         actual_check = github(root + '/check-runs/' + str(check['id']))
-        require(actual_check['head_sha'] == head and actual_check['conclusion'] == conclusion and
-                actual_check['status'] == 'completed' and actual_check['external_id'] == check['external_id'],
+        require(actual_check['head_sha'] == head and
+                actual_check.get('conclusion') == (None if pending else conclusion) and
+                actual_check['status'] == ('in_progress' if pending else 'completed') and
+                actual_check['external_id'] == check['external_id'],
                 'Review check readback mismatch')
         require(actual_check['name'] == 'Preloop review' and
                 actual_check.get('app', {}).get('slug') == 'github-actions' and
                 actual_check.get('details_url') == run_url, 'Wrong review check actor or run link')
         runtime.current_pr(github, binding, number, head, base)
         no_supersession(binding, token, completion)
-        status = runtime.commit_status(github, binding, head, proof['state'], run_url,
+        status = runtime.commit_status(github, binding, head, 'pending' if pending else proof['state'], run_url,
+                                        'Awaiting completed publisher and durable evidence.' if pending else
                                         'Complete review and genuine check independently read back.')
         runtime.write_receipt(Path(os.environ['RUNNER_TEMP']) / 'preloop-publication', {
             'execution_id': eid, 'head_sha': head, 'base_sha': base, 'claim_sha256': proof['claim_sha256'],
@@ -179,7 +212,8 @@ def publish():
             'result_sha256': completion['result_sha256'],
             'native_completion_status': proof['native_completion_status'],
             'execution_status': detail['status'], 'review_verdict': proof['result']['verdict'],
-            'controller_metadata': proof['controller_metadata']})
+            'controller_metadata': proof['controller_metadata'],
+            'historical_target_sha': historical})
         return 0 if proof['state'] == 'success' else 1
     except Exception:
         try:
@@ -202,6 +236,40 @@ def publish_error_status():
     bind_owned_execution(completion, intent, receipt, detail)
     no_supersession(binding, os.environ['PRELOOP_CI_TOKEN'], completion)
     runtime.current_pr(github, binding, completion['pr_number'], completion['head_sha'], completion['base_sha'])
+    local = Path(os.environ['RUNNER_TEMP']) / 'preloop-publication/receipt.json'
+    if local.exists():
+        recorded = json.loads(local.read_text())
+        claim = recorded.get('claim_sha256')
+        require(all(recorded.get(k) == completion[k] for k in
+                    ['execution_id', 'head_sha', 'base_sha', 'result_sha256']) and
+                type(claim) is str and re.fullmatch('[0-9a-f]{64}', claim),
+                'Late-failure publication receipt differs')
+        root = '/repos/' + binding['repository']
+        check_path = root + '/check-runs/' + str(recorded['check_id'])
+        check = github(check_path)
+        require(check.get('head_sha') == completion['head_sha'] and
+                check.get('name') == 'Preloop review' and
+                check.get('external_id') == 'briar-preloop:' + claim and
+                check.get('app', {}).get('slug') == 'github-actions' and
+                check.get('details_url') == 'https://github.com/' + binding['repository'] +
+                    '/actions/runs/' + os.environ['GITHUB_RUN_ID'] and
+                '<!-- briar-preloop:' + eid + ':' + claim + ' -->' in
+                    (check.get('output', {}).get('text') or ''),
+                'Late-failure check ownership differs')
+        if (recorded.get('state') == 'failure' and
+                recorded.get('execution_status') == 'SUCCEEDED' and
+                recorded.get('review_verdict') == 'changes_requested' and
+                ((check.get('status') == 'completed' and check.get('conclusion') == 'failure') or
+                 (binding.get('publication_finalizer') and check.get('status') == 'in_progress' and
+                  check.get('conclusion') is None)) and
+                os.environ.get('PRELOOP_PUBLISH_OUTCOME') == 'failure' and
+                os.environ.get('PRELOOP_PUBLICATION_UPLOAD_OUTCOME') == 'success'):
+            # A delivered blocking judgement is not a delivery/service failure.
+            return
+        github(check_path, 'PATCH', {'status': 'completed', 'conclusion': 'failure',
+            'output': {'title': 'Publisher workflow failed after review publication',
+                       'summary': 'No completed delivery acceptance; reconcile durable evidence.',
+                       'text': check['output']['text']}})
     run_url = 'https://github.com/' + binding['repository'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID']
     runtime.commit_status(github, binding, completion['head_sha'], 'error', run_url,
                           'Review validation or publication failed; no accepted review gate.')
@@ -234,5 +302,7 @@ def run_publication():
 if __name__ == '__main__':
     if sys.argv[1] == 'authenticate':
         authenticate()
+    elif sys.argv[1] == 'late-failure':
+        publish_error_status()
     else:
         raise SystemExit(run_publication())

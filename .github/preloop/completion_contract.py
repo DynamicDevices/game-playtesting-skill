@@ -114,8 +114,11 @@ def verify_result_projection(completion, artifact):
     require(artifact.get("error") is None and type(artifact["result"]) is dict,
             "Result response is an error, not a review")
     withheld = artifact.get("result_withheld_paths")
-    require(type(withheld) is list and not withheld,
+    require(type(withheld) is list and
+            (withheld == [] or withheld == ["/container_termination"]),
             "Result completeness was not proved or members were withheld")
+    require(not withheld or "container_termination" not in artifact["result"],
+            "Withheld controller metadata is still present")
     validation = artifact.get("schema_validation")
     require(type(validation) is dict and validation.get("valid") is True and
             type(validation.get("error_count")) is int and validation["error_count"] == 0 and

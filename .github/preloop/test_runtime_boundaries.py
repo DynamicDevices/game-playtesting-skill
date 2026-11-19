@@ -164,6 +164,35 @@ class CompletedPublicationTests(unittest.TestCase):
         self.assertNotEqual(self.code, self.head)
         self.assertTrue(self.accept()['actions_check_verified'])
 
+    def test_pending_phase_requires_real_completion_but_is_not_delivery(self):
+        self.check.update(status='in_progress', conclusion=None)
+        self.statuses[0]['state'] = 'pending'
+        with patch.object(runtime, 'artifact', return_value=self.receipt), patch.object(runtime, 'current_pr'):
+            result = runtime.completed_publication(self.github, self.binding, 12, self.eid,
+                                                   7, self.head, self.base, pending=True)
+            self.assertFalse(result['delivery_verified'])
+            self.assertFalse(result['review_approved'])
+            self.run['status'] = 'in_progress'
+            with self.assertRaises(InvalidReview):
+                runtime.completed_publication(self.github, self.binding, 12, self.eid,
+                                               7, self.head, self.base, pending=True)
+
+    def test_final_gate_requires_authenticated_matching_finalizer_intent(self):
+        self.binding['publication_finalizer'] = {'explicit_posture_approval': True}
+        final_url = 'https://github.com/example/repository/actions/runs/13'
+        self.check.update(details_url=final_url, output={'text':
+            '<!-- briar-preloop-finalized:12:13:' + 'c' * 64 + ' -->'})
+        self.statuses[0].update(id=34, target_url=final_url)
+        intent = dict(publisher_run_id='12', finalizer_run_id='13', publication_receipt=self.receipt)
+        def artifact(*args, **kwargs):
+            return intent if args[3] == 'preloop-review-finalize.yml' else self.receipt
+        with patch.object(runtime, 'artifact', side_effect=artifact), patch.object(runtime, 'current_pr'):
+            self.assertTrue(runtime.completed_publication(self.github, self.binding, 12, self.eid,
+                                                         7, self.head, self.base)['delivery_verified'])
+            intent['publisher_run_id'] = '99'
+            with self.assertRaises(InvalidReview):
+                runtime.completed_publication(self.github, self.binding, 12, self.eid, 7, self.head, self.base)
+
     def test_green_custom_check_cannot_hide_running_or_failed_actual_run(self):
         for key, value in [('status', 'in_progress'), ('conclusion', 'failure')]:
             saved = self.run[key]

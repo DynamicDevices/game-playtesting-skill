@@ -37,13 +37,13 @@ jobs:
         env:
           PRELOOP_PUBLICATION_AUTHORITY: ${{ secrets.PRELOOP_PUBLICATION_AUTHORITY }}
           PRELOOP_PUBLICATION_SIGNATURE: ${{ secrets.PRELOOP_PUBLICATION_SIGNATURE }}
-        run: python3 .github/preloop/install_policy.py
+        run: python3 -I -B .github/preloop/install_policy.py
       - name: Authenticate the completion or owned recovery
         id: authenticate
         env:
           GH_TOKEN: ${{ github.token }}
           PRELOOP_CALLBACK_SECRET: ${{ secrets.PRELOOP_CALLBACK_SECRET }}
-        run: python3 .github/preloop/publisher.py authenticate
+        run: python3 -I -B .github/preloop/bootstrap.py publisher authenticate
       - name: Preserve authenticated completion
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node24
         with:
@@ -75,14 +75,16 @@ jobs:
         env:
           PRELOOP_PUBLICATION_AUTHORITY: ${{ secrets.PRELOOP_PUBLICATION_AUTHORITY }}
           PRELOOP_PUBLICATION_SIGNATURE: ${{ secrets.PRELOOP_PUBLICATION_SIGNATURE }}
-        run: python3 .github/preloop/install_policy.py
+        run: python3 -I -B .github/preloop/install_policy.py
       - name: Validate, publish and independently read back
+        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
           PRELOOP_CI_TOKEN: ${{ secrets.PRELOOP_CI_TOKEN }}
           PRELOOP_EXECUTION_ID: ${{ needs.authenticate.outputs.execution_id }}
-        run: python3 .github/preloop/publisher.py publish
+        run: python3 -I -B .github/preloop/bootstrap.py publisher publish
       - name: Preserve actual publication receipt
+        id: publication_receipt
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node24
         with:
@@ -98,3 +100,12 @@ jobs:
           path: ${{ runner.temp }}/preloop-failure/receipt.json
           if-no-files-found: warn
           retention-days: 31
+      - name: Report late publisher failure honestly
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRELOOP_CI_TOKEN: ${{ secrets.PRELOOP_CI_TOKEN }}
+          PRELOOP_EXECUTION_ID: ${{ needs.authenticate.outputs.execution_id }}
+          PRELOOP_PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+          PRELOOP_PUBLICATION_UPLOAD_OUTCOME: ${{ steps.publication_receipt.outcome }}
+        run: python3 -I -B .github/preloop/bootstrap.py publisher late-failure

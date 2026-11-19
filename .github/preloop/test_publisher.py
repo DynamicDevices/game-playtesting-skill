@@ -90,7 +90,8 @@ class PublisherTests(unittest.TestCase):
 
     def artifacts(self, _github, _binding, name, _workflow, **_kwargs):
         if name.startswith('preloop-wake-'):
-            return {'completion': self.completion}
+            return {'completion': self.completion,
+                    'authenticated_run_id': _kwargs.get('run_id', os.environ['GITHUB_RUN_ID'])}
         return self.receipt if name.startswith('preloop-trigger-') else self.intent
 
     def preloop(self, path, _token, method='GET', body=None):
@@ -132,6 +133,14 @@ class PublisherTests(unittest.TestCase):
         self.assertIn(self.eid, self.reviews[0]['body'])
         self.assertTrue((Path(self.temp.name) / 'preloop-publication/receipt.json').exists())
 
+    def test_completion_enabled_publisher_never_releases_green_itself(self):
+        self.binding['publication_finalizer'] = {'explicit_posture_approval': True}
+        self.assertEqual(self.run_publisher(), 0)
+        self.assertEqual(self.statuses[0]['state'], 'pending')
+        self.assertEqual(self.checks[0]['status'], 'in_progress')
+        self.assertIsNone(self.checks[0].get('conclusion'))
+        self.assertEqual(len(self.reviews), 1)
+
     def test_lost_initial_check_response_cannot_recreate_on_empty_later_listing(self):
         self.fail_check = True
         with self.assertRaisesRegex(OSError, 'lost check response'): self.run_publisher()
@@ -164,6 +173,116 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(self.statuses, [])
         self.assertEqual(self.checks, [])
         self.assertEqual(self.preloop_calls, [])
+
+    def configure_recovery(self):
+        self.binding['publication_recovery'] = dict(
+            execution_id=self.eid, pr_number=7, head_sha='a' * 40, base_sha='b' * 40,
+            result_sha256=canonical_digest(self.result), original_publisher_run_id='11',
+            trigger_run_id='10', failed_before_check_creation=True, current_target_sha='b' * 40)
+        self.wakes.append(dict(name='preloop-wake-' + self.eid, expired=False,
+                               workflow_run={'id': 11}))
+        self.event.write_text(json.dumps(dict(inputs=dict(
+            execution_id=self.eid, authenticated_run_id='11'))))
+
+    def test_signed_publish_only_reconciliation_can_create_once(self):
+        self.configure_recovery()
+        self.result_envelope['result_withheld_paths'] = ['/container_termination']
+        with patch.dict(os.environ, GITHUB_EVENT_NAME='workflow_dispatch'):
+            self.assertEqual(self.run_publisher(), 0)
+        self.assertEqual(len(self.checks), 1)
+        self.assertEqual(len(self.reviews), 1)
+        # A subsequent run cannot repeat creation after an ambiguous/lost check.
+        self.hide_checks = True
+        self.wakes.append(dict(name='preloop-wake-' + self.eid, expired=False,
+                               workflow_run={'id': 13}))
+        with patch.dict(os.environ, GITHUB_RUN_ID='13', GITHUB_EVENT_NAME='workflow_dispatch'):
+            with self.assertRaises(InvalidReview): self.run_publisher()
+        self.assertEqual(len(self.checks), 1)
+
+    def test_reconciliation_denies_wrong_or_incomplete_signed_tuple(self):
+        self.configure_recovery()
+        original = copy.deepcopy(self.binding['publication_recovery'])
+        mutations = dict(execution_id='0' * 36, pr_number=8, head_sha='e' * 40,
+                         base_sha='e' * 40, result_sha256='e' * 64,
+                         trigger_run_id='9', original_publisher_run_id='9',
+                         failed_before_check_creation=False)
+        for key, value in mutations.items():
+            self.binding['publication_recovery'] = dict(original, **{key: value})
+            with self.subTest(key=key), patch.dict(os.environ, GITHUB_EVENT_NAME='workflow_dispatch'):
+                with self.assertRaises(InvalidReview): self.run_publisher()
+            self.assertFalse(self.checks or self.reviews)
+        self.binding.pop('publication_recovery')
+        with self.assertRaises(InvalidReview): self.run_publisher()
+
+    def test_reconciliation_denies_other_dispatch_and_wake_sets(self):
+        self.configure_recovery()
+        saved_event, saved_wakes = self.event.read_text(), copy.deepcopy(self.wakes)
+        for event in ({}, {'inputs': {'execution_id': self.eid, 'authenticated_run_id': '9'}},
+                      {'inputs': {'execution_id': self.eid, 'authenticated_run_id': '11', 'extra': 'x'}}):
+            self.event.write_text(json.dumps(event))
+            with patch.dict(os.environ, GITHUB_EVENT_NAME='workflow_dispatch'):
+                with self.assertRaises(InvalidReview): self.run_publisher()
+        self.event.write_text(saved_event)
+        with patch.dict(os.environ, GITHUB_EVENT_NAME='repository_dispatch'):
+            with self.assertRaises(InvalidReview): self.run_publisher()
+        for rows in ([], saved_wakes[:1], saved_wakes[1:], [saved_wakes[0]] * 2,
+                     saved_wakes + [saved_wakes[0]],
+                     [dict(saved_wakes[0], expired=True), saved_wakes[1]]):
+            self.wakes = rows
+            with patch.dict(os.environ, GITHUB_EVENT_NAME='workflow_dispatch'):
+                with self.assertRaises(InvalidReview): self.run_publisher()
+        self.assertFalse(self.checks or self.reviews)
+
+    def test_controller_redaction_never_hides_reviewer_fields(self):
+        for paths in (['/findings'], ['/review'], ['/container_termination', '/findings']):
+            self.result_envelope['result_withheld_paths'] = paths
+            with self.assertRaises(InvalidReview): self.run_publisher()
+        self.assertFalse(self.checks or self.reviews)
+
+    def test_historical_review_identifies_original_base_and_current_target(self):
+        self.configure_recovery()
+        self.binding['publication_recovery']['current_target_sha'] = 'e' * 40
+        with patch.dict(os.environ, GITHUB_EVENT_NAME='workflow_dispatch'):
+            self.assertEqual(self.run_publisher(), 0)
+        self.assertIn('Original reviewed base: ' + 'b' * 40, self.reviews[0]['body'])
+        self.assertIn('not approval against the advanced target', self.reviews[0]['body'])
+        receipt = json.loads((Path(self.temp.name) / 'preloop-publication/receipt.json').read_text())
+        self.assertEqual(receipt['historical_target_sha'], 'e' * 40)
+
+    def test_late_upload_failure_replaces_preliminary_green_without_reposting(self):
+        self.assertEqual(self.run_publisher(), 0)
+        self.run_publisher(entry=publisher.publish_error_status)
+        self.assertEqual(self.checks[0]['conclusion'], 'failure')
+        self.assertEqual(self.statuses[0]['state'], 'error')
+        self.assertEqual(len(self.reviews), 1)
+
+    def test_delivered_blocking_review_survives_expected_failed_job_cleanup(self):
+        self.result.update(success=False, verdict='changes_requested', findings=[dict(
+            severity='HIGH', location='file.py:1', problem='Problem', evidence='Evidence', fix='Fix')])
+        self.assertEqual(self.run_publisher(), 1)
+        with patch.dict(os.environ, PRELOOP_PUBLISH_OUTCOME='failure',
+                        PRELOOP_PUBLICATION_UPLOAD_OUTCOME='success'):
+            self.run_publisher(entry=publisher.publish_error_status)
+        self.assertEqual(self.statuses[0]['state'], 'failure')
+        self.assertEqual(self.checks[0]['conclusion'], 'failure')
+        self.assertEqual(len(self.statuses), 1)
+        with patch.dict(os.environ, PRELOOP_PUBLISH_OUTCOME='failure',
+                        PRELOOP_PUBLICATION_UPLOAD_OUTCOME='failure'):
+            self.run_publisher(entry=publisher.publish_error_status)
+        self.assertEqual(self.statuses[0]['state'], 'error')
+
+    def test_late_failure_cannot_patch_another_runs_check(self):
+        self.assertEqual(self.run_publisher(), 0)
+        self.checks[0]['details_url'] = 'https://github.com/example/repository/actions/runs/99'
+        with self.assertRaises(InvalidReview): self.run_publisher(entry=publisher.publish_error_status)
+        self.assertEqual(self.checks[0]['conclusion'], 'success')
+
+    def test_ambiguous_review_send_cannot_repost_using_an_existing_check(self):
+        self.fail_review = True
+        with self.assertRaises(InvalidReview): self.run_publisher()
+        self.fail_review = False
+        with self.assertRaisesRegex(InvalidReview, 'Ambiguous earlier review send'): self.run_publisher()
+        self.assertFalse(self.reviews)
 
     def failure_receipt(self):
         return json.loads((Path(self.temp.name) / 'preloop-failure/receipt.json').read_text())

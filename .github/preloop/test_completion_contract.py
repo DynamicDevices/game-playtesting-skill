@@ -133,7 +133,10 @@ class CompletionTests(unittest.TestCase):
                 verify_result_projection(self.check(), artifact)
 
     def test_withheld_or_unknown_completeness_is_rejected(self):
-        for withheld in (None, {}, '', ['/findings/0/evidence']):
+        for withheld in (None, {}, '', ['/findings/0/evidence'], ['/findings'],
+                         ['/review'], ['/container_termination/reason'],
+                         ['/container_termination', '/container_termination'],
+                         ['/container_termination', '/findings'], [None], [1]):
             artifact = self.artifact()
             artifact['result_withheld_paths'] = withheld
             with self.subTest(withheld=withheld), self.assertRaises(InvalidReview):
@@ -151,6 +154,29 @@ class CompletionTests(unittest.TestCase):
             artifact['error'] = {'code': 'missing_result'}
             with self.subTest(result=result), self.assertRaises(InvalidReview):
                 verify_result_projection(self.check(), artifact)
+
+    def test_only_controller_omission_preserves_untouched_review(self):
+        artifact = self.artifact()
+        artifact['result_withheld_paths'] = ['/container_termination']
+        self.assertIs(verify_result_projection(self.check(), artifact), self.result)
+        artifact['result'] = dict(self.result, review='Changed judgement')
+        with self.assertRaisesRegex(InvalidReview, 'signed completion'):
+            verify_result_projection(self.check(), artifact)
+
+    def test_controller_omission_cannot_contradict_actual_presence(self):
+        self.result['container_termination'] = {'reason': 'completed'}
+        self.data['result_sha256'] = canonical_digest(self.result)
+        artifact = self.artifact()
+        artifact['result_withheld_paths'] = ['/container_termination']
+        with self.assertRaisesRegex(InvalidReview, 'still present'):
+            verify_result_projection(self.check(), artifact)
+
+    def test_controller_omission_does_not_waive_service_schema(self):
+        artifact = self.artifact()
+        artifact['result_withheld_paths'] = ['/container_termination']
+        artifact['schema_validation']['valid'] = False
+        with self.assertRaisesRegex(InvalidReview, 'schema validation'):
+            verify_result_projection(self.check(), artifact)
 
     def test_digest_includes_telemetry_before_any_normalization(self):
         self.result['container_termination'] = {'reason': 'completed'}
