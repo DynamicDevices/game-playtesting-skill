@@ -134,11 +134,13 @@ def publish():
     body = review_body(proof['result']) + '\nExecution: https://preloop.ai/console/flows/executions/' + eid
     historical = runtime.historical_target(binding, number, head, base)
     existing = (binding.get('publication_recovery') or {}).get('existing_publication')
+    retained = runtime.retained_check_policy(binding)
     published_target = historical
     if existing is not None:
         runtime.recovery_scope(binding, completion)
         require(historical and type(existing) is dict and
-                set(existing) == {'review_id', 'check_id', 'claim_sha256', 'body_sha256', 'original_target_sha'} and
+                set(existing) == ({'review_id', 'check_id', 'claim_sha256', 'body_sha256', 'original_target_sha'} |
+                                  ({'preserve_failed_check'} if retained else set())) and
                 all(type(existing[k]) is int and existing[k] > 0 for k in ['review_id', 'check_id']) and
                 existing['claim_sha256'] == proof['claim_sha256'] and
                 type(existing['body_sha256']) is str and re.fullmatch('[0-9a-f]{64}', existing['body_sha256']) and
@@ -179,6 +181,9 @@ def publish():
                 hashlib.sha256(body.encode()).hexdigest() == existing['body_sha256'] and
                 matching[0].get('body') == body,
                 'Existing review/check differs from signed reconciliation; no resend')
+    if retained:
+        runtime.verify_retained_check(intents[0], binding, eid, proof['claim_sha256'])
+        runtime.verify_check_url(intents[0], binding, run_url)
     # This genuine check is created by the actual trusted Actions publisher,
     # tied to the reviewed SHA and workflow run, never by a desktop status script.
     if not intents:
@@ -210,11 +215,14 @@ def publish():
         # while pending and require an actually unfinished response below.
         if not pending:
             update['conclusion'] = conclusion
-        github(root + '/check-runs/' + str(check['id']), 'PATCH', update)
+        if not retained:
+            github(root + '/check-runs/' + str(check['id']), 'PATCH', update)
         actual_check = github(root + '/check-runs/' + str(check['id']))
+        if retained:
+            runtime.verify_retained_check(actual_check, binding, eid, proof['claim_sha256'])
         require(actual_check.get('id') == check['id'] and actual_check['head_sha'] == head and
-                actual_check.get('conclusion') == (None if pending else conclusion) and
-                actual_check['status'] == ('in_progress' if pending else 'completed') and
+                actual_check.get('conclusion') == ('failure' if retained else None if pending else conclusion) and
+                actual_check['status'] == ('completed' if retained else 'in_progress' if pending else 'completed') and
                 actual_check['external_id'] == check['external_id'],
                 'Review check readback mismatch')
         require(actual_check['name'] == 'Preloop review', 'Wrong review check name')
@@ -234,14 +242,16 @@ def publish():
             'native_completion_status': proof['native_completion_status'],
             'execution_status': detail['status'], 'review_verdict': proof['result']['verdict'],
             'controller_metadata': proof['controller_metadata'],
+            'pending_check_mode': 'retained_failure' if retained else 'in_progress',
             'historical_target_sha': historical})
         return 0 if proof['state'] == 'success' else 1
     except Exception:
         try:
-            github(root + '/check-runs/' + str(check['id']), 'PATCH', {
-                'status': 'completed', 'conclusion': 'failure',
-                'output': {'title': 'Publication failed', 'summary': 'Reconcile saved intent before any resend.',
-                           'text': marker}})
+            if not retained:
+                github(root + '/check-runs/' + str(check['id']), 'PATCH', {
+                    'status': 'completed', 'conclusion': 'failure',
+                    'output': {'title': 'Publication failed', 'summary': 'Reconcile saved intent before any resend.',
+                               'text': marker}})
         except Exception as secondary:
             print('Publication failure check was not confirmed: ' + type(secondary).__name__,
                   file=sys.stderr)
@@ -280,6 +290,11 @@ def publish_error_status():
                     (check.get('output', {}).get('text') or ''),
                 'Late-failure check ownership differs')
         runtime.verify_check_url(check, binding, recorded_run_url)
+        retained = runtime.retained_check_policy(binding)
+        if retained:
+            runtime.recovery_scope(binding, completion)
+            require(recorded.get('pending_check_mode') == 'retained_failure', 'Wrong retained receipt mode')
+            runtime.verify_retained_check(check, binding, eid, claim)
         if (recorded.get('state') == 'failure' and
                 recorded.get('execution_status') == 'SUCCEEDED' and
                 recorded.get('review_verdict') == 'changes_requested' and
@@ -290,10 +305,11 @@ def publish_error_status():
                 os.environ.get('PRELOOP_PUBLICATION_UPLOAD_OUTCOME') == 'success'):
             # A delivered blocking judgement is not a delivery/service failure.
             return
-        github(check_path, 'PATCH', {'status': 'completed', 'conclusion': 'failure',
-            'output': {'title': 'Publisher workflow failed after review publication',
-                       'summary': 'No completed delivery acceptance; reconcile durable evidence.',
-                       'text': check['output']['text']}})
+        if not retained:
+            github(check_path, 'PATCH', {'status': 'completed', 'conclusion': 'failure',
+                'output': {'title': 'Publisher workflow failed after review publication',
+                           'summary': 'No completed delivery acceptance; reconcile durable evidence.',
+                           'text': check['output']['text']}})
     run_url = 'https://github.com/' + binding['repository'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID']
     runtime.commit_status(github, binding, completion['head_sha'], 'error', run_url,
                           'Review validation or publication failed; no accepted review gate.')

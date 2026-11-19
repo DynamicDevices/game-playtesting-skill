@@ -262,6 +262,76 @@ class PublisherTests(unittest.TestCase):
             with self.assertRaises(InvalidReview): self.run_publisher()
         self.assertEqual(len(self.checks), 1)
 
+    def configure_retained_check(self):
+        self.configure_recovery()
+        recovery = self.binding['publication_recovery']
+        recovery['current_target_sha'] = 'e' * 40
+        with patch.dict(os.environ, GITHUB_EVENT_NAME='workflow_dispatch'):
+            self.assertEqual(self.run_publisher(), 0)
+        recovery['existing_publication'] = dict(review_id=22, check_id=11,
+            claim_sha256=self.checks[0]['external_id'].split(':', 1)[1],
+            body_sha256=hashlib.sha256(self.reviews[0]['body'].encode()).hexdigest(),
+            original_target_sha='e' * 40, preserve_failed_check=True)
+        recovery['current_target_sha'] = 'f' * 40
+        self.binding['publication_finalizer'] = dict(explicit_posture_approval=True,
+            workflow_path='.github/workflows/preloop-review-finalize.yml', event='workflow_run',
+            producer_path='.github/workflows/preloop-review-publish.yml')
+        self.checks[0].update(status='completed', conclusion='failure',
+                             details_url='https://github.com/example/repository/runs/11')
+        self.preserve_old_conclusion = True
+        self.calls.clear()
+
+    def test_retained_check_has_zero_producer_check_writes_or_duplicate_posts(self):
+        self.configure_retained_check()
+        original_check = copy.deepcopy(self.checks[0])
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, GITHUB_RUN_ID='13', RUNNER_TEMP=folder):
+            self.assertEqual(self.run_publisher(), 0)
+            receipt = json.loads((Path(folder) / 'preloop-publication/receipt.json').read_text())
+            self.assertEqual(receipt['pending_check_mode'], 'retained_failure')
+            self.assertEqual(receipt['historical_target_sha'], 'f' * 40)
+        self.assertEqual(self.checks[0], original_check)
+        self.assertEqual(len(self.checks), 1)
+        self.assertEqual(len(self.reviews), 1)
+        self.assertEqual(self.statuses[0]['state'], 'pending')
+        self.assertTrue(all(method == 'GET' or '/statuses/' in path for path, method, _ in self.calls))
+
+    def test_retained_check_substitutions_and_invalid_optins_deny_all_writes(self):
+        self.configure_retained_check()
+        cases = [('status', 'in_progress'), ('conclusion', 'success'), ('head_sha', 'c' * 40),
+                 ('id', 99), ('external_id', 'briar-preloop:' + '0' * 64),
+                 ('app', {'id': 15369, 'slug': 'github-actions'}),
+                 ('output', {'text': 'substituted'})]
+        for key, value in cases:
+            saved = self.checks[0][key];self.checks[0][key] = value;self.calls.clear()
+            with self.subTest(key=key), self.assertRaises(InvalidReview): self.run_publisher()
+            self.assertTrue(all(method == 'GET' for _, method, _ in self.calls))
+            self.checks[0][key] = saved
+        existing = self.binding['publication_recovery']['existing_publication']
+        for value in (False, 'true', 1, None):
+            existing['preserve_failed_check'] = value;self.calls.clear()
+            with self.subTest(optin=value), self.assertRaises(InvalidReview): self.run_publisher()
+            self.assertFalse(self.calls)
+        existing['preserve_failed_check'] = True
+        self.binding['publication_finalizer'] = {}
+        with self.assertRaises(InvalidReview): self.run_publisher()
+
+    def test_retained_late_failure_leaves_check_failed_and_sets_error_status(self):
+        self.configure_retained_check()
+        original_check = copy.deepcopy(self.checks[0])
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, GITHUB_RUN_ID='13', RUNNER_TEMP=folder):
+            self.assertEqual(self.run_publisher(), 0)
+            self.run_publisher(entry=publisher.publish_error_status)
+        self.assertEqual(self.checks[0], original_check)
+        self.assertEqual(self.statuses[0]['state'], 'error')
+        self.assertTrue(all(method == 'GET' or '/statuses/' in path for path, method, _ in self.calls))
+
+    def test_retained_receipt_failure_never_patches_check_in_exception_cleanup(self):
+        self.configure_retained_check()
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, GITHUB_RUN_ID='13', RUNNER_TEMP=folder), \
+             patch.object(publisher.runtime, 'write_receipt', side_effect=OSError('Synthetic disk failure')):
+            with self.assertRaises(OSError): self.run_publisher()
+        self.assertTrue(all(method == 'GET' or '/statuses/' in path for path, method, _ in self.calls))
+
     def test_reconciliation_denies_wrong_or_incomplete_signed_tuple(self):
         self.configure_recovery()
         original = copy.deepcopy(self.binding['publication_recovery'])

@@ -34,6 +34,46 @@ def verify_check_url(check, binding, run_url):
             'Wrong review check run link')
 
 
+def retained_check_policy(binding):
+    """Only a separately signed exact existing-post opt-in changes pending state."""
+    recovery = binding.get('publication_recovery')
+    existing = recovery.get('existing_publication') if type(recovery) is dict else None
+    if type(existing) is not dict or 'preserve_failed_check' not in existing:
+        return None
+    require(existing['preserve_failed_check'] is True and
+            set(existing) == {'review_id', 'check_id', 'claim_sha256', 'body_sha256',
+                              'original_target_sha', 'preserve_failed_check'} and
+            binding.get('publication_finalizer') == dict(explicit_posture_approval=True,
+                workflow_path='.github/workflows/preloop-review-finalize.yml', event='workflow_run',
+                producer_path='.github/workflows/preloop-review-publish.yml') and
+            all(type(existing[k]) is int and existing[k] > 0 for k in ['review_id', 'check_id']) and
+            all(type(existing[k]) is str and re.fullmatch('[0-9a-f]{64}', existing[k])
+                for k in ['claim_sha256', 'body_sha256']) and
+            type(existing['original_target_sha']) is str and
+            re.fullmatch('[0-9a-f]{40}', existing['original_target_sha']),
+            'Invalid exact retained-failure policy')
+    return existing
+
+
+def verify_retained_check(check, binding, execution_id, claim):
+    existing = retained_check_policy(binding)
+    recovery = binding.get('publication_recovery') or {}
+    marker = '<!-- briar-preloop:' + execution_id + ':' + claim + ' -->'
+    valid = (existing is not None and execution_id == recovery.get('execution_id') and
+        claim == existing['claim_sha256'] and check.get('id') == existing['check_id'] and
+        check.get('head_sha') == recovery.get('head_sha') and check.get('name') == 'Preloop review' and
+        check.get('external_id') == 'briar-preloop:' + claim and
+        check.get('app', {}).get('id') == 15368 and check.get('app', {}).get('slug') == 'github-actions' and
+        check.get('status') == 'completed' and check.get('conclusion') == 'failure' and
+        check.get('output', {}).get('text') == marker)
+    state = check.get('status'); conclusion = check.get('conclusion')
+    safe_state = state if state in ['queued', 'in_progress', 'completed'] else 'invalid'
+    safe_conclusion = conclusion if conclusion in [None, 'failure', 'success', 'cancelled', 'neutral'] else 'invalid'
+    require(valid, 'Retained check mismatch: status=' + str(safe_state) +
+            ', conclusion=' + str(safe_conclusion) + ', marker_match=' +
+            str(check.get('output', {}).get('text') == marker))
+
+
 def verify_live_service(binding, workload, workflow):
     """Fail-closed online suspension gate; no cached allow or signing-key claims.
 
@@ -460,6 +500,14 @@ def completed_publication(github, binding, run_id, execution_id, pr_number, head
                 receipt['review_body_sha256'] == existing.get('body_sha256'),
                 'Completed recovery differs from signed existing publication')
     finalizer_run_id, gate_url = None, run_url
+    retained = retained_check_policy(binding)
+    mode = receipt.get('pending_check_mode', 'in_progress')
+    require(mode == ('retained_failure' if retained else 'in_progress'),
+            'Publication pending-check mode differs from signed policy')
+    if retained:
+        recovery_scope(binding, dict(receipt, pr_number=pr_number))
+        if pending:
+            verify_retained_check(check, binding, execution_id, receipt['claim_sha256'])
     if not pending and binding.get('publication_finalizer'):
         pattern = r'<!-- briar-preloop-finalized:' + str(run_id) + r':([1-9][0-9]*):' + receipt['claim_sha256'] + r' -->'
         finalizers = re.findall(pattern, check.get('output', {}).get('text') or '')
@@ -468,8 +516,8 @@ def completed_publication(github, binding, run_id, execution_id, pr_number, head
         gate_url = 'https://github.com/' + binding['repository'] + '/actions/runs/' + finalizer_run_id
     require(check.get('id') == receipt['check_id'] and check.get('head_sha') == head and
             check.get('name') == 'Preloop review' and
-            check.get('status') == ('in_progress' if pending else 'completed') and
-            check.get('conclusion') == (None if pending else state) and
+            check.get('status') == ('completed' if retained and pending else 'in_progress' if pending else 'completed') and
+            check.get('conclusion') == ('failure' if retained and pending else None if pending else state) and
             check.get('app', {}).get('slug') == 'github-actions' and
             check.get('external_id') == 'briar-preloop:' + receipt['claim_sha256'],
             'Final check readback changed')
