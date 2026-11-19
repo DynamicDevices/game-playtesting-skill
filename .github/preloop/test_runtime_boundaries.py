@@ -234,6 +234,70 @@ class CompletedPublicationTests(unittest.TestCase):
             with self.assertRaises(InvalidReview):
                 runtime.completed_publication(self.github, self.binding, 12, self.eid, 7, self.head, self.base)
 
+    def configure_retained_pending(self):
+        self.receipt.update(result_sha256='d' * 64, pending_check_mode='retained_failure',
+                            historical_target_sha='f' * 40)
+        self.binding['publication_recovery'] = dict(execution_id=self.eid, pr_number=7,
+            head_sha=self.head, base_sha=self.base, result_sha256='d' * 64,
+            failed_before_check_creation=True, original_publisher_run_id='9', trigger_run_id='10',
+            current_target_sha='f' * 40, existing_publication=dict(review_id=22, check_id=11,
+                claim_sha256='c' * 64, body_sha256=self.receipt['review_body_sha256'],
+                original_target_sha='e' * 40, preserve_failed_check=True))
+        self.binding['publication_finalizer'] = dict(explicit_posture_approval=True,
+            workflow_path='.github/workflows/preloop-review-finalize.yml', event='workflow_run',
+            producer_path='.github/workflows/preloop-review-publish.yml')
+        self.check.update(conclusion='failure', details_url='https://github.com/example/repository/runs/11',
+            output={'text': '<!-- briar-preloop:' + self.eid + ':' + 'c' * 64 + ' -->'})
+        self.statuses[0]['state'] = 'pending'
+
+    def retained_pending_accept(self):
+        with patch.object(runtime, 'artifact', return_value=self.receipt), patch.object(runtime, 'current_pr'):
+            return runtime.completed_publication(self.github, self.binding, 12, self.eid,
+                                                 7, self.head, self.base, pending=True)
+
+    def test_retained_failure_is_only_intermediate_proof_not_delivery_or_approval(self):
+        self.configure_retained_pending()
+        result = self.retained_pending_accept()
+        self.assertFalse(result['delivery_verified'])
+        self.assertFalse(result['actions_check_verified'])
+        self.assertFalse(result['review_approved'])
+        for key, value in [('status', 'in_progress'), ('conclusion', 'failure')]:
+            saved = self.run[key];self.run[key] = value
+            with self.subTest(key=key), self.assertRaises(InvalidReview): self.retained_pending_accept()
+            self.run[key] = saved
+
+    def test_retained_pending_requires_exact_mode_tuple_and_failed_check(self):
+        self.configure_retained_pending()
+        self.receipt['pending_check_mode'] = 'in_progress'
+        with self.assertRaises(InvalidReview): self.retained_pending_accept()
+        self.receipt['pending_check_mode'] = 'retained_failure'
+        for key, value in [('conclusion', 'success'), ('status', 'in_progress'),
+                           ('output', {'text': 'substituted'}), ('head_sha', '0' * 40)]:
+            saved = self.check[key];self.check[key] = value
+            with self.subTest(key=key), self.assertRaises(InvalidReview): self.retained_pending_accept()
+            self.check[key] = saved
+        self.binding['publication_recovery']['result_sha256'] = '0' * 64
+        with self.assertRaises(InvalidReview): self.retained_pending_accept()
+
+    def test_retained_final_acceptance_requires_real_success_and_finalizer_intent(self):
+        self.configure_retained_pending()
+        final_url = 'https://github.com/example/repository/actions/runs/13'
+        self.statuses[0].update(id=34, state='success', target_url=final_url)
+        self.check['output']['text'] += '\n<!-- briar-preloop-finalized:12:13:' + 'c' * 64 + ' -->'
+        intent = dict(publisher_run_id='12', finalizer_run_id='13', publication_receipt=self.receipt)
+        def artifact(*args, **kwargs):
+            return intent if args[3] == 'preloop-review-finalize.yml' else self.receipt
+        with patch.object(runtime, 'artifact', side_effect=artifact), patch.object(runtime, 'current_pr'):
+            with self.assertRaises(InvalidReview):
+                runtime.completed_publication(self.github, self.binding, 12, self.eid, 7, self.head, self.base)
+            self.check['conclusion'] = 'success'
+            result = runtime.completed_publication(self.github, self.binding, 12, self.eid, 7, self.head, self.base)
+            self.assertTrue(result['delivery_verified'])
+            self.assertFalse(result['review_approved'])
+            intent['publisher_run_id'] = '99'
+            with self.assertRaises(InvalidReview):
+                runtime.completed_publication(self.github, self.binding, 12, self.eid, 7, self.head, self.base)
+
     def test_green_custom_check_cannot_hide_running_or_failed_actual_run(self):
         for key, value in [('status', 'in_progress'), ('conclusion', 'failure')]:
             saved = self.run[key]

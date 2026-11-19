@@ -115,6 +115,31 @@ class FinalizerTests(unittest.TestCase):
                 finalize.producer(self.github, self.binding)
         self.assertFalse(self.calls)
 
+    def test_retained_receipt_still_requires_completed_publication_proof(self):
+        self.receipt['pending_check_mode'] = 'retained_failure'
+        name = 'preloop-publication-' + self.receipt['execution_id']
+        def artifact(*args, **kwargs):
+            return {'completion': self.completion} if args[2].startswith('preloop-wake-') else self.receipt
+        with patch.object(finalize.runtime, 'github_pages', return_value=[dict(name=name, expired=False)]), \
+             patch.object(finalize.runtime, 'artifact', side_effect=artifact), \
+             patch.object(finalize.runtime, 'completed_publication', return_value={'publication_receipt': self.receipt}) as verify, \
+             patch.object(finalize.publisher, 'no_supersession'):
+            self.assertEqual(finalize.producer(self.github, self.binding)[0], '12')
+            self.assertTrue(verify.call_args.kwargs['pending'])
+            verify.side_effect = InvalidReview('Producer receipt or completion invalid')
+            with self.assertRaises(InvalidReview): finalize.producer(self.github, self.binding)
+        self.assertFalse(self.calls)
+
+    def test_retained_mode_release_is_only_after_durable_own_intent(self):
+        self.receipt['pending_check_mode'] = 'retained_failure'
+        with self.assertRaises(InvalidReview): self.run_phase(finalize.release)
+        self.assertFalse(self.calls)
+        name = finalize.intent_name('12', self.receipt)
+        self.rows = [dict(name=name, expired=False, workflow_run={'id': 13})]
+        self.run_phase(finalize.release).assert_called_once()
+        self.assertEqual(self.check['conclusion'], 'success')
+        self.assertTrue(all(method in ['GET', 'PATCH'] for _, method, _ in self.calls))
+
 
 if __name__ == '__main__':
     unittest.main()

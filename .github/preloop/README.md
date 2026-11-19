@@ -69,8 +69,8 @@ workflows must be active for the live revocation check: restore only the recorde
 gameplay trigger after reviewed-source/policy/preflight gates, recover without a
 new PR event or inference, and pause it again on failure.
 
-With the signed completion-gate policy, the publisher posts the validated review
-but keeps its custom check and status pending. A repository-local `workflow_run`
+With the signed completion-gate policy, an ordinary publisher posts the validated
+review but keeps its custom check and status pending. A repository-local `workflow_run`
 finalizer independently verifies the completed ORIGINAL publisher, required
 jobs/steps, durable publication receipt, authenticated completion and unchanged
 review/claim/revisions. It saves its own unique durable intent before releasing
@@ -93,7 +93,7 @@ also links the actual Actions run; commit statuses still require its exact URL.
 Publish-only recovery reuses an exactly matching existing review/check rather
 than posting another review. Pending updates omit `conclusion`: GitHub requires
 a string enum when it is supplied, and supplying it forces completed status.
-Readback must actually show `in_progress` with no conclusion before the pending
+Ordinary readback must actually show `in_progress` with no conclusion before the pending
 receipt is saved. A retained old failure conclusion stops recovery; it is never
 silently accepted. No new inference is needed for publication recovery.
 If another repair has advanced the target since an existing historical post,
@@ -101,6 +101,22 @@ the signed recovery policy must also pin that post's exact review/check IDs,
 claim, body hash and original target. Its original body is preserved byte-for-byte;
 the new receipt records the newer recovery target separately. Missing or changed
 publication evidence refuses all resends and does not count as base approval.
+
+There is one separately signed recovery opt-in for an already completed failed
+check: `existing_publication.preserve_failed_check` must be literal `true`, with
+the exact existing review/check/body/claim/target tuple and admitted finalizer.
+The publisher reuses and verifies that exact `completed`/`failure` check without
+any check PATCH or new review/check POST. It keeps native status pending and
+saves `pending_check_mode: retained_failure` in its durable receipt. A failed
+producer leaves the check failed and native status error. Normal runs and missing
+opt-ins retain the ordinary unfinished-check rule; malformed/false opt-ins deny.
+
+Only the finalizer, after actual completed producer, required steps, durable
+receipt, authenticated completion, unchanged original review/check/claim and its
+unique durable intent, may release the exact owned check's real verdict. Pending
+validation of retained failure is never final delivery; final acceptance still
+requires the real final verdict/check/status and authenticated finalizer evidence.
+Historical recovery remains not approved against the advanced target.
 
 Before live use, coordinate the flow's result_schema/prompt and new signed config
 hash with this contract, and include native_result.py in the complete signed
