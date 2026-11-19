@@ -13,6 +13,19 @@ import trigger
 
 
 class TriggerTests(unittest.TestCase):
+    def test_automatic_draft_events_skip_before_privileged_trigger_work(self):
+        workflow = (Path(__file__).resolve().parents[1] / 'workflows/preloop-review-trigger.yml').read_text()
+        self.assertIn("  trigger:\n    if: github.event_name != 'pull_request_target' || "
+                      "github.event.pull_request.draft == false\n    runs-on:", workflow)
+        self.assertIn('types: [opened, synchronize, reopened, ready_for_review]', workflow)
+        # Manual dispatch retains runtime.current_pr's draft denial; it cannot
+        # use this skip to misrepresent an invalid selection as a review.
+        for event, draft, should_run in [('pull_request_target', True, False),
+                                         ('pull_request_target', False, True),
+                                         ('workflow_dispatch', None, True)]:
+            with self.subTest(event=event, draft=draft):
+                self.assertEqual(event != 'pull_request_target' or draft is False, should_run)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

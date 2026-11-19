@@ -257,6 +257,19 @@ values on the same record, malformed evidence, combined mismatches and ongoing
 inconsistency fail closed. This tolerates one inconsistent read pair; it does
 not guarantee GitHub propagation or make failed historical triggers successful.
 
+Automatic `pull_request_target` events for draft PRs skip the trigger job before
+checkout, credentials or launch. Marking a PR ready still triggers normal review.
+A skipped job is not a passed review and does not release a review gate. Manual
+dispatch retains the helper's explicit draft/closed-PR denial. This workflow
+change only affects trusted runs after it is merged and its exact source policy
+is signed and installed; changing PR-head YAML cannot modify current base runs.
+
+The 19November review of PR20 exhausted the DD flow's300-second launch budget
+while successful model/tool calls were still occurring. Its separate proposed
+600-second native deadline remains subject to complete configuration review and
+matching signed installation gates. The hard whole-workload cutoff and terminal
+cleanup remain required; a larger deadline is not proof a review will finish.
+
 Bootstrap also needs resolution: GitHub dispatch workflows must already be on
 the default branch, but independent Preloop review is required before installation.
 The selected project grant permits bootstrap installation only after Alex's
