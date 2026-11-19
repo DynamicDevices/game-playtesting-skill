@@ -91,8 +91,11 @@ producer ownership: the signed source, full claim/review, completed producer,
 durable publication receipt and finalizer intent remain mandatory. Check output
 also links the actual Actions run; commit statuses still require its exact URL.
 Publish-only recovery reuses an exactly matching existing review/check rather
-than posting another review, and clears the old conclusion while awaiting the
-completed-producer gate. No new inference is needed for publication recovery.
+than posting another review. Pending updates omit `conclusion`: GitHub requires
+a string enum when it is supplied, and supplying it forces completed status.
+Readback must actually show `in_progress` with no conclusion before the pending
+receipt is saved. A retained old failure conclusion stops recovery; it is never
+silently accepted. No new inference is needed for publication recovery.
 If another repair has advanced the target since an existing historical post,
 the signed recovery policy must also pin that post's exact review/check IDs,
 claim, body hash and original target. Its original body is preserved byte-for-byte;
