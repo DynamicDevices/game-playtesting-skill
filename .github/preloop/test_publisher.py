@@ -187,6 +187,32 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(self.statuses[0]['state'], 'error')
         self.assertTrue((Path(self.temp.name) / 'preloop-publication/receipt.json').exists())
 
+    def test_failed_check_correction_still_attempts_owned_error_status(self):
+        self.assertEqual(self.run_publisher(), 0)
+        original = self.github
+        def request(path, method='GET', body=None):
+            if '/check-runs/' in path and method == 'PATCH':
+                raise OSError('Synthetic check correction failure')
+            return original(path, method, body)
+        with patch.object(self, 'github', side_effect=request):
+            with self.assertRaisesRegex(OSError, 'Synthetic check correction failure'):
+                self.run_publisher(entry=publisher.publish_error_status)
+        self.assertEqual(self.statuses[0]['state'], 'error')
+        self.assertEqual(len(self.reviews), 1)
+
+    def test_failed_check_correction_cannot_write_error_after_supersession(self):
+        self.assertEqual(self.run_publisher(), 0)
+        original = self.github
+        def request(path, method='GET', body=None):
+            if '/check-runs/' in path and method == 'PATCH':
+                raise OSError('Synthetic check correction failure')
+            return original(path, method, body)
+        with patch.object(self, 'github', side_effect=request), \
+             patch.object(publisher, 'no_supersession', side_effect=[None, InvalidReview('Superseded')]):
+            with self.assertRaisesRegex(OSError, 'Synthetic check correction failure'):
+                self.run_publisher(entry=publisher.publish_error_status)
+        self.assertEqual(len(self.statuses), 1)
+
     def test_completion_enabled_publisher_never_releases_green_itself(self):
         self.binding['publication_finalizer'] = {'explicit_posture_approval': True}
         self.assertEqual(self.run_publisher(), 0)

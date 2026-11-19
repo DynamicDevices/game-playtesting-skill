@@ -1,8 +1,16 @@
 # Shared Preloop review publication — integration candidate
 
-This implementation has not been accepted or activated. It needs independent
-exact-candidate review, signed service authority and a live PR pilot before use.
+The DD integration has signed service authority and is activated. Automatic
+triggering and hosted review have been observed, but end-to-end publication and
+automatic merge are not yet accepted. Record a successful live PR pilot before
+claiming that the full delivery route works. Configuration alone is not proof.
 It uses the existing shared organisation flow, not a new flow per repository.
+
+For explicitly admitted ordinary Briar PRs, the intended route is genuine
+same-head Preloop review, completed-finalizer admission, required CI and signed
+automatic-merge authority. GitHub must enforce `Preloop merge gate` and strict
+up-to-date-base checks. Failed, incomplete, stale or placeholder reviews cannot
+approve merging. Trust/security changes retain separate explicit approval.
 
 ## What runs where
 

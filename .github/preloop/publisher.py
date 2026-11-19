@@ -270,6 +270,7 @@ def publish_error_status():
     no_supersession(binding, os.environ['PRELOOP_CI_TOKEN'], completion)
     runtime.current_pr(github, binding, completion['pr_number'], completion['head_sha'], completion['base_sha'])
     local = Path(os.environ['RUNNER_TEMP']) / 'preloop-publication/receipt.json'
+    correction_error = None
     if local.exists():
         recorded = json.loads(local.read_text())
         claim = recorded.get('claim_sha256')
@@ -308,13 +309,27 @@ def publish_error_status():
             # A delivered blocking judgement is not a delivery/service failure.
             return
         if not retained:
-            github(check_path, 'PATCH', {'status': 'completed', 'conclusion': 'failure',
-                'output': {'title': 'Publisher workflow failed after review publication',
-                           'summary': 'No completed delivery acceptance; reconcile durable evidence.',
-                           'text': check['output']['text']}})
+            try:
+                github(check_path, 'PATCH', {'status': 'completed', 'conclusion': 'failure',
+                    'output': {'title': 'Publisher workflow failed after review publication',
+                               'summary': 'No completed delivery acceptance; reconcile durable evidence.',
+                               'text': check['output']['text']}})
+            except Exception as error:
+                correction_error = error
+                print('Late-failure check correction unconfirmed: ' + type(error).__name__, file=sys.stderr)
     run_url = 'https://github.com/' + binding['repository'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID']
-    runtime.commit_status(github, binding, completion['head_sha'], 'error', run_url,
-                          'Review validation or publication failed; no accepted review gate.')
+    try:
+        runtime.current_pr(github, binding, completion['pr_number'], completion['head_sha'], completion['base_sha'])
+        no_supersession(binding, os.environ['PRELOOP_CI_TOKEN'], completion)
+        runtime.commit_status(github, binding, completion['head_sha'], 'error', run_url,
+                              'Review validation or publication failed; no accepted review gate.')
+    except Exception as status_error:
+        if correction_error is not None:
+            print('Independent error status unconfirmed: ' + type(status_error).__name__, file=sys.stderr)
+            raise correction_error from status_error
+        raise
+    if correction_error is not None:
+        raise correction_error
 
 
 def run_publication():
