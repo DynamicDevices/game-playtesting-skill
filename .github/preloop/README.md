@@ -83,6 +83,22 @@ after gate release. The acceptance caller reads the actual completed original
 Actions run, finalizer intent and real review/check/status, and refuses historical
 delivery as current-base approval. Ambiguous writes require reconciliation.
 
+GitHub may normalize an Actions-app check's details URL to its own
+`https://github.com/<repository>/runs/<check-id>` URL. Validation permits only
+that exact check URL or the exact authenticated Actions-run URL, with GitHub
+Actions app ID `15368` and slug `github-actions`. Neither URL alone establishes
+producer ownership: the signed source, full claim/review, completed producer,
+durable publication receipt and finalizer intent remain mandatory. Check output
+also links the actual Actions run; commit statuses still require its exact URL.
+Publish-only recovery reuses an exactly matching existing review/check rather
+than posting another review, and clears the old conclusion while awaiting the
+completed-producer gate. No new inference is needed for publication recovery.
+If another repair has advanced the target since an existing historical post,
+the signed recovery policy must also pin that post's exact review/check IDs,
+claim, body hash and original target. Its original body is preserved byte-for-byte;
+the new receipt records the newer recovery target separately. Missing or changed
+publication evidence refuses all resends and does not count as base approval.
+
 Before live use, coordinate the flow's result_schema/prompt and new signed config
 hash with this contract, and include native_result.py in the complete signed
 source manifest. No live flow/schema/model or policy was changed by this source

@@ -22,6 +22,7 @@ class FinalizerTests(unittest.TestCase):
             review_url='https://github.com/example/repository/pull/7#review-22')
         self.completion = dict(self.receipt, pr_number=7, status='SUCCEEDED', result_ready=True)
         self.rows, self.calls = [], []
+        self.normalize_check_url = False
         self.intent = dict(publisher_run_id='12', finalizer_run_id='13',
                            publication_receipt=self.receipt, completion=self.completion)
         self.event = Path(self.temp.name) / 'event.json'
@@ -36,9 +37,11 @@ class FinalizerTests(unittest.TestCase):
     def github(self, path, method='GET', body=None):
         self.calls.append((path, method, body))
         if method == 'PATCH':
-            self.check = dict(body, head_sha='a' * 40, external_id='briar-preloop:' + 'd' * 64,
-                              app={'slug': 'github-actions'})
+            self.check = dict(body, id=11, head_sha='a' * 40, external_id='briar-preloop:' + 'd' * 64,
+                              app={'id': 15368, 'slug': 'github-actions'})
             return self.check
+        if self.normalize_check_url:
+            return dict(self.check, details_url='https://github.com/example/repository/runs/11')
         return self.check
 
     def run_phase(self, entry):
@@ -69,6 +72,15 @@ class FinalizerTests(unittest.TestCase):
         self.assertIn('briar-preloop-finalized:12:13:', self.check['output']['text'])
         self.assertTrue(all(method in ['GET', 'PATCH'] for _, method, _ in self.calls))
         self.assertTrue(all('/check-runs/11' in path for path, _, _ in self.calls))
+
+    def test_normalized_get_still_requires_intent_before_release(self):
+        self.normalize_check_url = True
+        with self.assertRaises(InvalidReview): self.run_phase(finalize.release)
+        self.assertFalse(self.calls)
+        name = finalize.intent_name('12', self.receipt)
+        self.rows = [dict(name=name, expired=False, workflow_run={'id': 13})]
+        self.run_phase(finalize.release).assert_called_once()
+        self.assertIn('/actions/runs/13', self.check['output']['summary'])
 
     def test_missing_extra_old_expired_or_mutated_intent_denies_all_writes(self):
         name = finalize.intent_name('12', self.receipt)

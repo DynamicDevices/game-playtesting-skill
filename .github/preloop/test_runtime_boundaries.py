@@ -112,6 +112,29 @@ class TriggerEventTests(unittest.TestCase):
                 with self.assertRaises(InvalidReview): runtime.record_trigger_event()
 
 
+class CheckURLTests(unittest.TestCase):
+    def test_exact_run_or_own_canonical_check_url_only(self):
+        binding = {'repository': 'example/repository'}
+        root = 'https://github.com/example/repository'
+        run_url = root + '/actions/runs/12'
+        check = dict(id=11, app={'id': 15368, 'slug': 'github-actions'})
+        for url in (run_url, root + '/runs/11'):
+            runtime.verify_check_url(dict(check, details_url=url), binding, run_url)
+        for url in (root + '/runs/12', root + '/actions/runs/99',
+                    root + '/runs/11?x=1', root + '/runs/11/',
+                    'https://github.com/other/repository/runs/11',
+                    'https://attacker.example/example/repository/runs/11',
+                    'http://github.com/example/repository/runs/11', None):
+            with self.subTest(url=url), self.assertRaises(InvalidReview):
+                runtime.verify_check_url(dict(check, details_url=url), binding, run_url)
+        for update in ({'id': True}, {'id': 11.0}, {'id': '11'}, {'id': 0},
+                       {'app': {'id': 15368, 'slug': 'other'}},
+                       {'app': {'id': 15369, 'slug': 'github-actions'}},
+                       {'app': {'id': 15368.0, 'slug': 'github-actions'}}):
+            with self.subTest(update=update), self.assertRaises(InvalidReview):
+                runtime.verify_check_url(dict(check, details_url=run_url, **update), binding, run_url)
+
+
 class CompletedPublicationTests(unittest.TestCase):
     def setUp(self):
         self.eid = '487d988a-53ad-4f5d-8b84-d77bb733676f'
@@ -138,7 +161,7 @@ class CompletedPublicationTests(unittest.TestCase):
                            user={'login': 'github-actions[bot]'}, body=self.body,
                            html_url=self.receipt['review_url'])
         self.check = dict(id=11, name='Preloop review', head_sha=self.head, status='completed',
-                          conclusion='success', details_url=self.url, app={'slug': 'github-actions'},
+                          conclusion='success', details_url=self.url, app={'id': 15368, 'slug': 'github-actions'},
                           external_id='briar-preloop:' + 'c' * 64)
         self.statuses = [dict(id=33, context='Preloop review', state='success', target_url=self.url,
                               creator={'login': 'github-actions[bot]'})]
@@ -163,6 +186,24 @@ class CompletedPublicationTests(unittest.TestCase):
     def test_real_completed_jobs_accept_distinct_trusted_code_and_reviewed_heads(self):
         self.assertNotEqual(self.code, self.head)
         self.assertTrue(self.accept()['actions_check_verified'])
+
+    def test_canonical_check_url_does_not_replace_completed_producer_proof(self):
+        self.check['details_url'] = 'https://github.com/example/repository/runs/11'
+        self.assertTrue(self.accept()['delivery_verified'])
+        self.run['status'] = 'in_progress'
+        with self.assertRaises(InvalidReview): self.accept()
+
+    def test_completed_recovery_requires_exact_signed_existing_publication(self):
+        existing = dict(review_id=22, check_id=11, claim_sha256='c' * 64,
+                        body_sha256=self.receipt['review_body_sha256'])
+        self.binding['publication_recovery'] = {'existing_publication': existing}
+        self.assertTrue(self.accept()['delivery_verified'])
+        for key, value in [('review_id', 23), ('check_id', 12), ('claim_sha256', 'e' * 64),
+                           ('body_sha256', 'f' * 64)]:
+            saved = existing[key]
+            existing[key] = value
+            with self.subTest(key=key), self.assertRaises(InvalidReview): self.accept()
+            existing[key] = saved
 
     def test_pending_phase_requires_real_completion_but_is_not_delivery(self):
         self.check.update(status='in_progress', conclusion=None)

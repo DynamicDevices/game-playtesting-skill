@@ -133,9 +133,21 @@ def publish():
     marker = '<!-- briar-preloop:' + eid + ':' + proof['claim_sha256'] + ' -->'
     body = review_body(proof['result']) + '\nExecution: https://preloop.ai/console/flows/executions/' + eid
     historical = runtime.historical_target(binding, number, head, base)
+    existing = (binding.get('publication_recovery') or {}).get('existing_publication')
+    published_target = historical
+    if existing is not None:
+        runtime.recovery_scope(binding, completion)
+        require(historical and type(existing) is dict and
+                set(existing) == {'review_id', 'check_id', 'claim_sha256', 'body_sha256', 'original_target_sha'} and
+                all(type(existing[k]) is int and existing[k] > 0 for k in ['review_id', 'check_id']) and
+                existing['claim_sha256'] == proof['claim_sha256'] and
+                type(existing['body_sha256']) is str and re.fullmatch('[0-9a-f]{64}', existing['body_sha256']) and
+                type(existing['original_target_sha']) is str and re.fullmatch('[0-9a-f]{40}', existing['original_target_sha']),
+                'Malformed signed existing-publication reconciliation')
+        published_target = existing['original_target_sha']
     if historical:
         body += ('\n\nHistorical review recovery. Reviewed head: ' + head +
-                 '\nOriginal reviewed base: ' + base + '\nCurrent target: ' + historical +
+                 '\nOriginal reviewed base: ' + base + '\nCurrent target: ' + published_target +
                  '\nThis publishes the original review, not approval against the advanced target.')
     body += '\n\nResult: ' + proof['state'] + '\n\nPosted by Briar on Alex\'s behalf.\n' + marker
     reviews = runtime.github_pages(github, path + '/reviews')
@@ -161,6 +173,12 @@ def publish():
         require(intents[0].get('head_sha') == head and intents[0].get('name') == 'Preloop review' and
                 intents[0].get('app', {}).get('slug') == 'github-actions', 'Wrong existing check intent')
     require(matching or not intents, 'Ambiguous earlier review send; reconcile before replay')
+    if existing is not None:
+        require(len(matching) == len(intents) == 1 and
+                matching[0].get('id') == existing['review_id'] and intents[0].get('id') == existing['check_id'] and
+                hashlib.sha256(body.encode()).hexdigest() == existing['body_sha256'] and
+                matching[0].get('body') == body,
+                'Existing review/check differs from signed reconciliation; no resend')
     # This genuine check is created by the actual trusted Actions publisher,
     # tied to the reviewed SHA and workflow run, never by a desktop status script.
     if not intents:
@@ -184,20 +202,19 @@ def publish():
         conclusion = 'success' if proof['state'] == 'success' else 'failure'
         pending = bool(binding.get('publication_finalizer'))
         update = {'status': 'in_progress' if pending else 'completed', 'details_url': run_url,
+            'conclusion': None if pending else conclusion,
             'output': {'title': 'Review published; awaiting completed Actions' if pending else
-                       'Preloop review published', 'summary': readback['html_url'], 'text': marker}}
-        if not pending:
-            update['conclusion'] = conclusion
+                       'Preloop review published',
+                   'summary': readback['html_url'] + '\n\nActions: ' + run_url, 'text': marker}}
         github(root + '/check-runs/' + str(check['id']), 'PATCH', update)
         actual_check = github(root + '/check-runs/' + str(check['id']))
-        require(actual_check['head_sha'] == head and
+        require(actual_check.get('id') == check['id'] and actual_check['head_sha'] == head and
                 actual_check.get('conclusion') == (None if pending else conclusion) and
                 actual_check['status'] == ('in_progress' if pending else 'completed') and
                 actual_check['external_id'] == check['external_id'],
                 'Review check readback mismatch')
-        require(actual_check['name'] == 'Preloop review' and
-                actual_check.get('app', {}).get('slug') == 'github-actions' and
-                actual_check.get('details_url') == run_url, 'Wrong review check actor or run link')
+        require(actual_check['name'] == 'Preloop review', 'Wrong review check name')
+        runtime.verify_check_url(actual_check, binding, run_url)
         runtime.current_pr(github, binding, number, head, base)
         no_supersession(binding, token, completion)
         status = runtime.commit_status(github, binding, head, 'pending' if pending else proof['state'], run_url,
@@ -240,8 +257,11 @@ def publish_error_status():
     if local.exists():
         recorded = json.loads(local.read_text())
         claim = recorded.get('claim_sha256')
+        recorded_run_url = 'https://github.com/' + binding['repository'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID']
         require(all(recorded.get(k) == completion[k] for k in
                     ['execution_id', 'head_sha', 'base_sha', 'result_sha256']) and
+                recorded.get('actions_run_url') == recorded_run_url and
+                recorded.get('publication_run_attempt') == os.environ.get('GITHUB_RUN_ATTEMPT', '1') and
                 type(claim) is str and re.fullmatch('[0-9a-f]{64}', claim),
                 'Late-failure publication receipt differs')
         root = '/repos/' + binding['repository']
@@ -251,11 +271,11 @@ def publish_error_status():
                 check.get('name') == 'Preloop review' and
                 check.get('external_id') == 'briar-preloop:' + claim and
                 check.get('app', {}).get('slug') == 'github-actions' and
-                check.get('details_url') == 'https://github.com/' + binding['repository'] +
-                    '/actions/runs/' + os.environ['GITHUB_RUN_ID'] and
+                check.get('id') == recorded['check_id'] and
                 '<!-- briar-preloop:' + eid + ':' + claim + ' -->' in
                     (check.get('output', {}).get('text') or ''),
                 'Late-failure check ownership differs')
+        runtime.verify_check_url(check, binding, recorded_run_url)
         if (recorded.get('state') == 'failure' and
                 recorded.get('execution_status') == 'SUCCEEDED' and
                 recorded.get('review_verdict') == 'changes_requested' and

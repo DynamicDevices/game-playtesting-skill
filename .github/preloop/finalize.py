@@ -87,13 +87,14 @@ def release():
     publisher.no_supersession(binding, os.environ['PRELOOP_CI_TOKEN'], completion)
     github(check_path, 'PATCH', {'status': 'completed', 'conclusion': receipt['state'],
         'details_url': run_url, 'output': {'title': 'Completed publisher and durable review verified',
-        'summary': receipt['review_url'], 'text': marker}})
+        'summary': receipt['review_url'] + '\n\nActions: ' + run_url, 'text': marker}})
     actual = github(check_path)
     require(actual.get('status') == 'completed' and actual.get('conclusion') == receipt['state'] and
-            actual.get('head_sha') == head and actual.get('details_url') == run_url and
+            actual.get('head_sha') == head and actual.get('id') == receipt['check_id'] and
             actual.get('external_id') == 'briar-preloop:' + receipt['claim_sha256'] and
             actual.get('app', {}).get('slug') == 'github-actions' and
             actual.get('output', {}).get('text') == marker, 'Finalized check readback mismatch')
+    runtime.verify_check_url(actual, binding, run_url)
     runtime.current_pr(github, binding, number, head, base)
     publisher.no_supersession(binding, os.environ['PRELOOP_CI_TOKEN'], completion)
     runtime.commit_status(github, binding, head, receipt['state'], run_url,
