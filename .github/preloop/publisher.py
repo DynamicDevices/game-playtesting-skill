@@ -202,10 +202,14 @@ def publish():
         conclusion = 'success' if proof['state'] == 'success' else 'failure'
         pending = bool(binding.get('publication_finalizer'))
         update = {'status': 'in_progress' if pending else 'completed', 'details_url': run_url,
-            'conclusion': None if pending else conclusion,
             'output': {'title': 'Review published; awaiting completed Actions' if pending else
                        'Preloop review published',
                    'summary': readback['html_url'] + '\n\nActions: ' + run_url, 'text': marker}}
+        # GitHub's update contract requires a string enum when conclusion is
+        # supplied; even a valid conclusion forces completed status. Omit it
+        # while pending and require an actually unfinished response below.
+        if not pending:
+            update['conclusion'] = conclusion
         github(root + '/check-runs/' + str(check['id']), 'PATCH', update)
         actual_check = github(root + '/check-runs/' + str(check['id']))
         require(actual_check.get('id') == check['id'] and actual_check['head_sha'] == head and

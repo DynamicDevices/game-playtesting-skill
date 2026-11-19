@@ -49,6 +49,7 @@ class PublisherTests(unittest.TestCase):
         self.readback_actor = 'github-actions[bot]'
         self.check_actor = 'github-actions'
         self.normalize_check_url = False
+        self.preserve_old_conclusion = False
         self.event = Path(self.temp.name) / 'event.json'
         self.event.write_text('{}')
         env = patch.dict(os.environ, GITHUB_REPOSITORY='example/repository', GH_TOKEN='fixture',
@@ -68,7 +69,17 @@ class PublisherTests(unittest.TestCase):
         if '/check-runs/' in path:
             value = next(row for row in self.checks if row['id'] == int(path.rsplit('/', 1)[1]))
             if method == 'PATCH':
+                if 'conclusion' in body and body['conclusion'] not in (
+                        'action_required', 'cancelled', 'failure', 'neutral',
+                        'success', 'skipped', 'stale', 'timed_out'):
+                    raise InvalidReview('Synthetic HTTP422 invalid conclusion')
                 value.update(body)
+                if 'conclusion' in body:
+                    value['status'] = 'completed'
+                elif body.get('status') == 'in_progress' and not self.preserve_old_conclusion:
+                    # Simulate an unfinished API response. The separate stale
+                    # conclusion test ensures production never assumes this.
+                    value['conclusion'] = None
             if method == 'GET' and self.normalize_check_url:
                 return dict(value, details_url='https://github.com/example/repository/runs/' + str(value['id']))
             return value
@@ -166,6 +177,32 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(self.checks[0]['status'], 'in_progress')
         self.assertIsNone(self.checks[0].get('conclusion'))
         self.assertEqual(len(self.reviews), 1)
+
+    def test_pending_update_omits_conclusion_and_fake_rejects_invalid_enum(self):
+        self.binding['publication_finalizer'] = {'explicit_posture_approval': True}
+        self.assertEqual(self.run_publisher(), 0)
+        updates = [body for path, method, body in self.calls
+                   if '/check-runs/' in path and method == 'PATCH' and body.get('status') == 'in_progress']
+        self.assertEqual(len(updates), 1)
+        self.assertNotIn('conclusion', updates[0])
+        for conclusion in (None, True, 1, 'pending', ''):
+            with self.subTest(conclusion=conclusion), self.assertRaisesRegex(InvalidReview, 'HTTP422'):
+                self.github('/check-runs/11', 'PATCH', {'status': 'in_progress', 'conclusion': conclusion})
+        self.github('/check-runs/11', 'PATCH', {'status': 'in_progress', 'conclusion': 'failure'})
+        self.assertEqual(self.checks[0]['status'], 'completed')
+
+    def test_recovery_refuses_uncleared_old_conclusion_without_duplicate_post(self):
+        self.binding['publication_finalizer'] = {'explicit_posture_approval': True}
+        self.assertEqual(self.run_publisher(), 0)
+        self.checks[0].update(status='completed', conclusion='failure')
+        self.preserve_old_conclusion = True
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, GITHUB_RUN_ID='13', RUNNER_TEMP=folder):
+            with self.assertRaisesRegex(InvalidReview, 'Review check readback mismatch'):
+                self.run_publisher()
+            self.assertFalse((Path(folder) / 'preloop-publication/receipt.json').exists())
+        self.assertEqual(len(self.reviews), 1)
+        self.assertEqual(len(self.checks), 1)
+        self.assertEqual(self.checks[0]['conclusion'], 'failure')
 
     def test_lost_initial_check_response_cannot_recreate_on_empty_later_listing(self):
         self.fail_check = True
