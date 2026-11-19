@@ -47,7 +47,18 @@ jobs:
           if-no-files-found: error
           retention-days: 31
       - name: Finalize owned review gate
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
           PRELOOP_CI_TOKEN: ${{ secrets.PRELOOP_CI_TOKEN }}
         run: python3 -I -B .github/preloop/bootstrap.py finalize release
+      - name: Preserve failed finalization evidence
+        if: always() && steps.release.outcome == 'failure'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node24
+        with:
+          name: preloop-finalize-failure-${{ steps.prepare.outputs.execution_id }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/preloop-finalize-release/receipt.json
+            ${{ runner.temp }}/preloop-finalize-failure/receipt.json
+          if-no-files-found: warn
+          retention-days: 31

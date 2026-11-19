@@ -230,6 +230,22 @@ against the existing result after diagnosis, without another inference run.
 Only owned failure-status cleanup may read failed or still-running trigger
 receipts; it cannot publish a review or a successful gate.
 
+Finalization records its exact release attempt before touching GitHub. If any
+release write, readback or final status fails, it preserves the original failure
+and attempts to mark only its authenticated owned check as failed, then posts
+an error status even if the check correction fails. Cleanup rechecks the current
+PR, supersession, exact check/claim/revision/actor and original-or-current run
+marker; changed ownership or target evidence denies cleanup writes. The workflow
+preserves failure/attempt receipts after a failed release for explicit
+reconciliation. It does not retry release or inference. API outages, revocation,
+cancellation and runner loss can prevent cleanup or receipt upload; any partial
+visible success is not accepted delivery and must be reconciled from the saved
+intent, workflow outcome and available failure evidence.
+Final delivery also requires the exact finalizer workflow, its bound job and
+`Finalize owned review gate` step to have completed successfully. A failed
+finalizer's durable intent and visible success records cannot satisfy acceptance,
+even when API failures prevent cleanup. Failed receipts remain diagnostic only.
+
 Bootstrap also needs resolution: GitHub dispatch workflows must already be on
 the default branch, but independent Preloop review is required before installation.
 The selected project grant permits bootstrap installation only after Alex's

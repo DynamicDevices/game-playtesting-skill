@@ -404,6 +404,15 @@ def artifact(github, binding, name, workflow, allow_failed=False, run_id=None, a
                         all(any(step.get('name') == name and step.get('conclusion') == 'success'
                                 for step in job.get('steps', [])) for name in
                             ['Prepare completed publisher finalization', 'Preserve finalization intent'])]
+                if not current and not allow_failed:
+                    require(len(auth) == 1 and auth[0].get('status') == 'completed' and
+                            auth[0].get('conclusion') == 'success' and
+                            str(auth[0].get('run_id')) == str(run['id']) and
+                            auth[0].get('head_sha') == run.get('head_sha') and
+                            any(step.get('name') == 'Finalize owned review gate' and
+                                step.get('status') == 'completed' and step.get('conclusion') == 'success'
+                                for step in auth[0].get('steps', [])),
+                            'Finalizer release job did not complete successfully')
             else:
                 auth = [job for job in jobs if job['name'] == 'Authenticate completion' and
                         job['conclusion'] == 'success']
@@ -541,7 +550,7 @@ def completed_publication(github, binding, run_id, execution_id, pr_number, head
             'Latest review status no longer matches the publication')
     if not pending and binding.get('publication_finalizer'):
         intent = artifact(github, binding, 'preloop-finalize-' + execution_id + '-' + str(run_id),
-                          'preloop-review-finalize.yml', allow_failed=True, run_id=finalizer_run_id)
+                          'preloop-review-finalize.yml', run_id=finalizer_run_id)
         require(intent.get('publisher_run_id') == str(run_id) and
                 intent.get('finalizer_run_id') == finalizer_run_id and
                 intent.get('publication_receipt') == receipt,
