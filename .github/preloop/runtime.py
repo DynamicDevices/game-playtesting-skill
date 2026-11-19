@@ -169,26 +169,43 @@ def commit_status(github, binding, head, state, run_url, description):
     # Individual status records have no sha field. Bind through the combined
     # exact-commit endpoint and independently check the newest matching record.
     combined = github(root + '/commits/' + head + '/status')
-    current = next((row for row in combined['statuses'] if row['context'] == 'Preloop review'), None)
     # Combined statuses omit creator. The list endpoint retains actor identity;
     # join both independently read records by the ID returned by this write.
     statuses = github(root + '/commits/' + head + '/statuses?per_page=100')
-    require(type(statuses) is list, 'Malformed commit status list')
-    observed = next((row for row in statuses if row.get('context') == 'Preloop review'), None)
-    checks = {
-        'combined_commit': combined['sha'] == head,
-        'combined_status_id': bool(current) and current['id'] == status['id'],
-        'combined_state': bool(current) and current['state'] == state,
-        'combined_target_url': bool(current) and current['target_url'] == run_url,
-        'listed_status_id': bool(observed) and observed.get('id') == status['id'],
-        'listed_state': bool(observed) and observed.get('state') == state,
-        'listed_target_url': bool(observed) and observed.get('target_url') == run_url,
-        'listed_actor': bool(observed) and type(observed.get('creator')) is dict and
-                        observed['creator'].get('login') == 'github-actions[bot]',
-    }
-    failed = [name for name, passed in checks.items() if not passed]
+    def snapshot(combined, statuses):
+        require(type(combined) is dict and type(combined.get('statuses')) is list and
+                all(type(row) is dict for row in combined['statuses']), 'Malformed combined status')
+        require(type(statuses) is list and all(type(row) is dict for row in statuses),
+                'Malformed commit status list')
+        current = next((row for row in combined['statuses'] if row.get('context') == 'Preloop review'), None)
+        observed = next((row for row in statuses if row.get('context') == 'Preloop review'), None)
+        checks = {
+            'combined_commit': combined.get('sha') == head,
+            'combined_status_id': bool(current) and current.get('id') == status['id'],
+            'combined_state': bool(current) and current.get('state') == state,
+            'combined_target_url': bool(current) and current.get('target_url') == run_url,
+            'listed_status_id': bool(observed) and observed.get('id') == status['id'],
+            'listed_state': bool(observed) and observed.get('state') == state,
+            'listed_target_url': bool(observed) and observed.get('target_url') == run_url,
+            'listed_actor': bool(observed) and type(observed.get('creator')) is dict and
+                            observed['creator'].get('login') == 'github-actions[bot]',
+        }
+        return [name for name, passed in checks.items() if not passed], observed
+    failed, observed = snapshot(combined, statuses)
+    # Reconcile one specific inconsistent snapshot, not an arbitrary failed
+    # verifier. Same-record corruption, wrong actors or combined mismatches
+    # remain immediate failures. Never repeat the POST or sleep/poll here.
+    if (failed and 'listed_status_id' in failed and
+            all(name.startswith('listed_') for name in failed) and
+            (observed is None or type(observed.get('creator')) is dict and
+             observed['creator'].get('login') == 'github-actions[bot]')):
+        statuses = github(root + '/commits/' + head + '/statuses?per_page=100')
+        # Recheck the latest combined record AFTER the refreshed list, so a
+        # visible superseding status cannot be accepted as our earlier write.
+        combined = github(root + '/commits/' + head + '/status')
+        failed, _ = snapshot(combined, statuses)
     # Emit only fixed field names, never API records or credential-bearing URLs.
-    # Keep the original fail-closed checks and single-write/two-read contract.
+    # Same fail-closed predicates; only the missing-record case adds two GETs.
     require(not failed, 'Commit status readback mismatch: ' + ', '.join(failed))
     return status
 

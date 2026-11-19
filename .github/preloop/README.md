@@ -246,6 +246,17 @@ Final delivery also requires the exact finalizer workflow, its bound job and
 finalizer's durable intent and visible success records cannot satisfy acceptance,
 even when API failures prevent cleanup. Failed receipts remain diagnostic only.
 
+GitHub commit-status publication performs one POST and verifies both the
+exact-commit combined status and the actor-bearing status list. If the combined
+record already exactly matches the write but the list lacks it (or still shows
+another GitHub Actions record), the helper makes one additional list read and
+then a fresh combined read. It does not sleep, loop or repeat the POST. Both
+final snapshots must agree on this write's exact ID, state, run URL and context;
+the combined commit and list actor must also match. Wrong actors, conflicting
+values on the same record, malformed evidence, combined mismatches and ongoing
+inconsistency fail closed. This tolerates one inconsistent read pair; it does
+not guarantee GitHub propagation or make failed historical triggers successful.
+
 Bootstrap also needs resolution: GitHub dispatch workflows must already be on
 the default branch, but independent Preloop review is required before installation.
 The selected project grant permits bootstrap installation only after Alex's
