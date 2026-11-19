@@ -152,7 +152,7 @@ class RuntimeTests(unittest.TestCase):
                 with self.assertRaises(InvalidReview):
                     runtime.commit_status(github, self.binding, 'a' * 40, 'success', status['target_url'], 'Reviewed')
 
-    def test_status_mismatch_names_failed_gate_without_dumping_records_or_retry(self):
+    def test_status_mismatch_names_failed_gate_without_dumping_records_or_reposting(self):
         for changed, expected in [('commit', 'combined_commit'), ('combined_id', 'combined_status_id'),
                                   ('combined_state', 'combined_state'), ('combined_url', 'combined_target_url'),
                                   ('listed_id', 'listed_status_id'), ('listed_state', 'listed_state'),
@@ -182,6 +182,126 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual(str(caught.exception), 'Commit status readback mismatch: ' + expected)
                 self.assertEqual(calls, ['POST', 'GET', 'GET'])
                 self.assertNotIn('untrusted-sensitive-value', str(caught.exception))
+
+    def test_status_reconciles_missing_or_stale_list_without_reposting(self):
+        url = 'https://github.com/example/repository/actions/runs/12'
+        status = dict(id=9, context='Preloop review', state='pending', target_url=url,
+                      creator={'login': 'github-actions[bot]'})
+        combined = dict(sha='a' * 40, statuses=[{k: v for k, v in status.items() if k != 'creator'}])
+        for stale in [[], [dict(status, id=8, state='error')], [dict(context='unrelated')]]:
+            for state in ['pending', 'success', 'failure', 'error']:
+                with self.subTest(stale=stale, state=state):
+                    expected = dict(status, state=state)
+                    exact = dict(combined, statuses=[dict(combined['statuses'][0], state=state)])
+                    responses = iter([expected, exact, stale, [expected], exact])
+                    calls = []
+                    def github(path, method='GET', body=None):
+                        calls.append((path, method))
+                        return next(responses)
+                    with patch.dict(os.environ, GITHUB_RUN_ID='12'):
+                        self.assertEqual(runtime.commit_status(github, self.binding, 'a' * 40,
+                                         state, url, 'Reviewed'), expected)
+                    self.assertEqual([m for _, m in calls], ['POST', 'GET', 'GET', 'GET', 'GET'])
+                    self.assertTrue(calls[-2][0].endswith('/statuses?per_page=100'))
+                    self.assertTrue(calls[-1][0].endswith('/status'))
+
+    def test_status_reconciliation_never_accepts_divergent_or_persistently_missing_evidence(self):
+        url = 'https://github.com/example/repository/actions/runs/12'
+        status = dict(id=9, context='Preloop review', state='success', target_url=url,
+                      creator={'login': 'github-actions[bot]'})
+        combined = dict(sha='a' * 40, statuses=[dict(status)])
+        cases = [([], combined), ([dict(status, id=8)], combined),
+                 ([dict(status, creator={'login': 'other'})], combined),
+                 ([dict(status, state='pending')], combined),
+                 ([dict(status, target_url='https://example.invalid')], combined),
+                 ([status], dict(combined, sha='b' * 40)),
+                 ([status], dict(combined, statuses=[dict(status, id=10)])),
+                 ({'malformed': True}, combined)]
+        for listed, final in cases:
+            with self.subTest(listed=listed, final=final):
+                responses = iter([status, combined, [], listed, final])
+                calls = []
+                def github(_path, method='GET', body=None):
+                    calls.append(method)
+                    return next(responses)
+                with patch.dict(os.environ, GITHUB_RUN_ID='12'), self.assertRaises(InvalidReview):
+                    runtime.commit_status(github, self.binding, 'a' * 40, 'success', url, 'Reviewed')
+                self.assertEqual(calls.count('POST'), 1)
+                self.assertLessEqual(len(calls), 5)
+
+    def test_status_reconciles_combined_lag_only_when_list_already_proves_write(self):
+        url = 'https://github.com/example/repository/actions/runs/12'
+        for state in ['pending', 'success', 'failure', 'error']:
+            status = dict(id=9, context='Preloop review', state=state, target_url=url,
+                          creator={'login': 'github-actions[bot]'})
+            exact = dict(sha='a' * 40, statuses=[dict(status)])
+            for stale in [[], [dict(status, id=8, state='error', target_url='old')]]:
+                calls = []
+                responses = iter([status, dict(exact, statuses=stale), [status], [status], exact])
+                def github(path, method='GET', body=None):
+                    calls.append((path, method))
+                    return next(responses)
+                with self.subTest(state=state, stale=stale), patch.dict(os.environ, GITHUB_RUN_ID='12'):
+                    self.assertEqual(runtime.commit_status(github, self.binding, 'a' * 40,
+                                     state, url, 'Reviewed'), status)
+                self.assertEqual([m for _, m in calls], ['POST', 'GET', 'GET', 'GET', 'GET'])
+                self.assertTrue(calls[-2][0].endswith('/statuses?per_page=100'))
+                self.assertTrue(calls[-1][0].endswith('/status'))
+
+    def test_status_combined_reconciliation_rejects_conflicts_and_dual_lag(self):
+        url = 'https://github.com/example/repository/actions/runs/12'
+        status = dict(id=9, context='Preloop review', state='success', target_url=url,
+                      creator={'login': 'github-actions[bot]'})
+        exact = dict(sha='a' * 40, statuses=[dict(status)])
+        cases = [([], [], 3),
+                 ([dict(status, id=8)], [dict(status, id=8)], 3),
+                 ([dict(status, id=10)], [status], 3),
+                 ([dict(status, id='8')], [status], 3),
+                 ([dict(status, id=True)], [status], 3),
+                 ([dict(status, state='pending')], [status], 3),
+                 ([dict(status, target_url='wrong')], [status], 3),
+                 ([], [dict(status, creator={'login': 'other'})], 3)]
+        for combined_rows, listed, expected_calls in cases:
+            calls = []
+            responses = iter([status, dict(exact, statuses=combined_rows), listed])
+            def github(_path, method='GET', body=None):
+                calls.append(method)
+                return next(responses)
+            with self.subTest(combined_rows=combined_rows, listed=listed), patch.dict(os.environ, GITHUB_RUN_ID='12'), self.assertRaises(InvalidReview):
+                runtime.commit_status(github, self.binding, 'a' * 40, 'success', url, 'Reviewed')
+            self.assertEqual(len(calls), expected_calls)
+
+    def test_status_combined_reconciliation_must_converge_without_supersession(self):
+        url = 'https://github.com/example/repository/actions/runs/12'
+        status = dict(id=9, context='Preloop review', state='success', target_url=url,
+                      creator={'login': 'github-actions[bot]'})
+        exact = dict(sha='a' * 40, statuses=[dict(status)])
+        for final in [dict(exact, statuses=[]), dict(exact, statuses=[dict(status, id=10)]),
+                      dict(exact, sha='b' * 40), dict(exact, statuses=[dict(status, state='pending')])]:
+            calls = []
+            responses = iter([status, dict(exact, statuses=[]), [status], [status], final])
+            def github(_path, method='GET', body=None):
+                calls.append(method)
+                return next(responses)
+            with self.subTest(final=final), patch.dict(os.environ, GITHUB_RUN_ID='12'), self.assertRaises(InvalidReview):
+                runtime.commit_status(github, self.binding, 'a' * 40, 'success', url, 'Reviewed')
+            self.assertEqual(calls, ['POST', 'GET', 'GET', 'GET', 'GET'])
+
+    def test_status_reconciliation_does_not_retry_wrong_actor_or_same_record_conflicts(self):
+        url = 'https://github.com/example/repository/actions/runs/12'
+        status = dict(id=9, context='Preloop review', state='success', target_url=url,
+                      creator={'login': 'github-actions[bot]'})
+        combined = dict(sha='a' * 40, statuses=[dict(status)])
+        for wrong in [dict(status, id=8, creator={'login': 'other'}),
+                      dict(status, state='pending'), dict(status, creator=None)]:
+            calls = []
+            responses = iter([status, combined, [wrong]])
+            def github(_path, method='GET', body=None):
+                calls.append(method)
+                return next(responses)
+            with self.subTest(wrong=wrong), patch.dict(os.environ, GITHUB_RUN_ID='12'), self.assertRaises(InvalidReview):
+                runtime.commit_status(github, self.binding, 'a' * 40, 'success', url, 'Reviewed')
+            self.assertEqual(calls, ['POST', 'GET', 'GET'])
 
     def test_pull_request_target_revision_is_trusted_base(self):
         # Actual failed run43750543323: REST head differs from OIDC/base.
@@ -232,7 +352,11 @@ class RuntimeTests(unittest.TestCase):
                    status='completed', conclusion='success')
         row = dict(id=1, name='preloop-trigger-execution', expired=False,
                    workflow_run={'id': 10})
-        with patch.object(runtime, 'github_pages', return_value=[row]), \
+        jobs = [dict(name='trigger', conclusion='success', steps=[
+            dict(name='Validate native startup once', conclusion='success')])]
+        def pages(_github, _path, field):
+            return jobs if field == 'jobs' else [row]
+        with patch.object(runtime, 'github_pages', side_effect=pages), \
              patch.object(trust, 'download_trigger_artifact', return_value=receipt), \
              patch.object(trust, 'verify_sources') as sources, \
              patch.dict(os.environ, GH_TOKEN='fixture'):
@@ -243,6 +367,47 @@ class RuntimeTests(unittest.TestCase):
             receipt['workflow_sha'] = head
             with self.assertRaises(InvalidReview):
                 runtime.artifact(github, binding, row['name'], 'preloop-review-trigger.yml')
+
+    def test_trigger_artifact_requires_completed_success_and_successful_startup_step(self):
+        row = dict(id=1, name='preloop-trigger-execution', expired=False, workflow_run={'id': 10})
+        run = dict(id=10, path='.github/workflows/preloop-review-trigger.yml',
+                   status='completed', conclusion='success')
+        receipt = dict(trigger_run_id='10', head_sha='a' * 40)
+        job = dict(name='trigger', conclusion='success', steps=[
+            dict(name='Validate native startup once', conclusion='success')])
+        jobs = [job]
+        def pages(_github, _path, field):
+            return jobs if field == 'jobs' else [row]
+        with patch.object(runtime, 'github_pages', side_effect=pages), \
+             patch.object(trust, 'download_trigger_artifact', return_value=receipt), \
+             patch.object(trust, 'trigger_workflow_sha', return_value='b' * 40), \
+             patch.object(runtime, 'receipt_source_binding', return_value=dict(self.binding, approved_files={})), \
+             patch.object(trust, 'verify_sources'), patch.dict(os.environ, GH_TOKEN='fixture'):
+            def read(**kwargs):
+                return runtime.artifact(lambda _path: run, self.binding, row['name'],
+                                        'preloop-review-trigger.yml', **kwargs)
+            self.assertEqual(read(), receipt)
+            for state, conclusion in [('in_progress', None), ('queued', None),
+                                      ('completed', 'failure'), ('completed', 'cancelled'),
+                                      ('completed', 'timed_out'), ('completed', 'skipped'),
+                                      ('completed', None)]:
+                with self.subTest(state=state, conclusion=conclusion):
+                    run.update(status=state, conclusion=conclusion)
+                    with self.assertRaisesRegex(InvalidReview, 'not completed successfully'):
+                        read()
+            # The explicit cleanup-only caller may still establish ownership
+            # for failed/in-progress runs. It does not publish a review/pass.
+            for state in ['completed', 'in_progress']:
+                run.update(status=state, conclusion='failure' if state == 'completed' else None)
+                self.assertEqual(read(allow_failed=True), receipt)
+            run.update(status='completed', conclusion='success')
+            bad_jobs = [[], [dict(job, conclusion='failure')],
+                        [dict(job, name='another job')], [dict(job, steps=[])], [job, job]]
+            bad_jobs += [[dict(job, steps=[dict(name='Validate native startup once', conclusion=value)])]
+                         for value in ['failure', 'cancelled', 'skipped', None]]
+            for jobs in bad_jobs:
+                with self.subTest(jobs=jobs), self.assertRaisesRegex(InvalidReview, 'startup validation'):
+                    read()
 
     def test_source_manifest_batched_tree_and_exact_content_fallback(self):
         source = b'fixed trusted code\n'

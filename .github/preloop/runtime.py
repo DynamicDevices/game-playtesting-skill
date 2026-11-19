@@ -92,6 +92,8 @@ def verify_live_service(binding, workload, workflow):
     names = {'preloop-review-trigger.yml', 'preloop-review-publish.yml'}
     if binding.get('publication_finalizer'):
         names.add('preloop-review-finalize.yml')
+    if binding.get('publication_merge_gate'):
+        names.add('preloop-review-merge.yml')
     paths = policy.get('workflow_paths')
     require(type(paths) is dict and set(paths) == names and workflow in names and
             all(paths[name] == '.github/workflows/' + name for name in names),
@@ -158,37 +160,66 @@ def context(workflow):
     return binding, workload, github
 
 
-def commit_status(github, binding, head, state, run_url, description):
+def commit_status(github, binding, head, state, run_url, description, *, context_name='Preloop review'):
+    require(context_name == 'Preloop review' or context_name == 'Preloop merge gate' and
+            binding.get('publication_merge_gate') == trust.MERGE_GATE,
+            'Status context is not admitted')
     require(state in ['pending', 'success', 'failure', 'error'], 'Invalid commit status state')
     require(re.fullmatch('[0-9a-f]{40}', head), 'Invalid status commit')
     expected_url = 'https://github.com/' + binding['repository'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID']
     require(run_url == expected_url, 'Status must link this actual Actions run')
     root = '/repos/' + binding['repository']
     status = github(root + '/statuses/' + head, 'POST', {
-        'state': state, 'context': 'Preloop review', 'target_url': run_url, 'description': description})
+        'state': state, 'context': context_name, 'target_url': run_url, 'description': description})
+    require(type(status) is dict and type(status.get('id')) is int and status['id'] > 0,
+            'Malformed posted commit status')
     # Individual status records have no sha field. Bind through the combined
     # exact-commit endpoint and independently check the newest matching record.
     combined = github(root + '/commits/' + head + '/status')
-    current = next((row for row in combined['statuses'] if row['context'] == 'Preloop review'), None)
     # Combined statuses omit creator. The list endpoint retains actor identity;
     # join both independently read records by the ID returned by this write.
     statuses = github(root + '/commits/' + head + '/statuses?per_page=100')
-    require(type(statuses) is list, 'Malformed commit status list')
-    observed = next((row for row in statuses if row.get('context') == 'Preloop review'), None)
-    checks = {
-        'combined_commit': combined['sha'] == head,
-        'combined_status_id': bool(current) and current['id'] == status['id'],
-        'combined_state': bool(current) and current['state'] == state,
-        'combined_target_url': bool(current) and current['target_url'] == run_url,
-        'listed_status_id': bool(observed) and observed.get('id') == status['id'],
-        'listed_state': bool(observed) and observed.get('state') == state,
-        'listed_target_url': bool(observed) and observed.get('target_url') == run_url,
-        'listed_actor': bool(observed) and type(observed.get('creator')) is dict and
-                        observed['creator'].get('login') == 'github-actions[bot]',
-    }
-    failed = [name for name, passed in checks.items() if not passed]
+    def snapshot(combined, statuses):
+        require(type(combined) is dict and type(combined.get('statuses')) is list and
+                all(type(row) is dict for row in combined['statuses']), 'Malformed combined status')
+        require(type(statuses) is list and all(type(row) is dict for row in statuses),
+                'Malformed commit status list')
+        current = next((row for row in combined['statuses'] if row.get('context') == context_name), None)
+        observed = next((row for row in statuses if row.get('context') == context_name), None)
+        checks = {
+            'combined_commit': combined.get('sha') == head,
+            'combined_status_id': bool(current) and type(current.get('id')) is int and current.get('id') == status['id'],
+            'combined_state': bool(current) and current.get('state') == state,
+            'combined_target_url': bool(current) and current.get('target_url') == run_url,
+            'listed_status_id': bool(observed) and type(observed.get('id')) is int and observed.get('id') == status['id'],
+            'listed_state': bool(observed) and observed.get('state') == state,
+            'listed_target_url': bool(observed) and observed.get('target_url') == run_url,
+            'listed_actor': bool(observed) and type(observed.get('creator')) is dict and
+                            observed['creator'].get('login') == 'github-actions[bot]',
+        }
+        return [name for name, passed in checks.items() if not passed], current, observed
+    failed, current, observed = snapshot(combined, statuses)
+    def older_or_missing(row):
+        return row is None or (type(row.get('id')) is int and 0 < row['id'] < status['id'])
+    # One endpoint must already prove our exact record. Reconcile only a
+    # missing/older ID on the other endpoint, never same-record conflicts,
+    # malformed IDs, wrong actors or a visibly newer competing write.
+    list_lag = ('listed_status_id' in failed and
+                all(name.startswith('listed_') for name in failed) and
+                older_or_missing(observed) and
+                (observed is None or type(observed.get('creator')) is dict and
+                 observed['creator'].get('login') == 'github-actions[bot]'))
+    combined_lag = ('combined_status_id' in failed and
+                    all(name in ['combined_status_id', 'combined_state', 'combined_target_url']
+                        for name in failed) and older_or_missing(current))
+    if failed and (list_lag or combined_lag):
+        statuses = github(root + '/commits/' + head + '/statuses?per_page=100')
+        # Recheck the latest combined record AFTER the refreshed list, so a
+        # visible superseding status cannot be accepted as our earlier write.
+        combined = github(root + '/commits/' + head + '/status')
+        failed, _, _ = snapshot(combined, statuses)
     # Emit only fixed field names, never API records or credential-bearing URLs.
-    # Keep the original fail-closed checks and single-write/two-read contract.
+    # Same final predicates; only an isolated missing/older record adds two GETs.
     require(not failed, 'Commit status readback mismatch: ' + ', '.join(failed))
     return status
 
@@ -372,9 +403,20 @@ def artifact(github, binding, name, workflow, allow_failed=False, run_id=None, a
                 'Artifact came from another workflow')
         current = allow_current and str(run['id']) == os.environ['GITHUB_RUN_ID']
         trigger = workflow == 'preloop-review-trigger.yml'
-        require(current or (trigger and run['status'] in ['in_progress', 'completed']) or
+        require(current or (trigger and allow_failed and run['status'] in ['in_progress', 'completed']) or
                 (run['status'] == 'completed' and (allow_failed or run['conclusion'] == 'success')),
                 'Artifact workflow has not completed successfully')
+        if trigger and not allow_failed:
+            # A later controller proof must not erase a failed initial startup
+            # observation. Pending startup may pass that observation, but the
+            # completed result still has to prove checkout/setup/agent startup.
+            jobs = github_pages(github, path + '/actions/runs/' + str(run['id']) + '/jobs', 'jobs')
+            startup = [job for job in jobs if job.get('name') == 'trigger' and
+                       job.get('conclusion') == 'success' and
+                       any(step.get('name') == 'Validate native startup once' and
+                           step.get('conclusion') == 'success'
+                           for step in job.get('steps', []))]
+            require(len(startup) == 1, 'Trigger startup validation did not succeed')
         value = trust.download_trigger_artifact(binding['repository'], item['id'], os.environ['GH_TOKEN'])
         if workflow == 'preloop-review-trigger.yml':
             revision = trust.trigger_workflow_sha(run, value, binding, value['head_sha'])
@@ -393,6 +435,15 @@ def artifact(github, binding, name, workflow, allow_failed=False, run_id=None, a
                         all(any(step.get('name') == name and step.get('conclusion') == 'success'
                                 for step in job.get('steps', [])) for name in
                             ['Prepare completed publisher finalization', 'Preserve finalization intent'])]
+                if not current and not allow_failed:
+                    require(len(auth) == 1 and auth[0].get('status') == 'completed' and
+                            auth[0].get('conclusion') == 'success' and
+                            str(auth[0].get('run_id')) == str(run['id']) and
+                            auth[0].get('head_sha') == run.get('head_sha') and
+                            any(step.get('name') == 'Finalize owned review gate' and
+                                step.get('status') == 'completed' and step.get('conclusion') == 'success'
+                                for step in auth[0].get('steps', [])),
+                            'Finalizer release job did not complete successfully')
             else:
                 auth = [job for job in jobs if job['name'] == 'Authenticate completion' and
                         job['conclusion'] == 'success']
@@ -456,14 +507,14 @@ def completed_publication(github, binding, run_id, execution_id, pr_number, head
             'Publication receipt binding or run attempt changed')
     jobs = github_pages(github, path + '/jobs?filter=latest', 'jobs')
     require(len(jobs) == 2, 'Unexpected publisher workflow jobs')
-    for name in ['Authenticate completion', 'Preloop review']:
+    for name in ['Authenticate completion', 'Publish validated Preloop review']:
         matches = [job for job in jobs if job.get('name') == name]
         require(len(matches) == 1 and matches[0].get('status') == 'completed' and
                 matches[0].get('conclusion') == ('success' if name == 'Authenticate completion' else state) and
                 str(matches[0].get('run_id')) == str(run_id) and
                 matches[0].get('head_sha') == run.get('head_sha'),
                 'Actual required publisher job did not succeed')
-        if name == 'Preloop review':
+        if name == 'Publish validated Preloop review':
             steps = matches[0].get('steps') or []
             for step_name, conclusion in [('Validate, publish and independently read back', state),
                                            ('Preserve actual publication receipt', 'success')]:
@@ -530,7 +581,7 @@ def completed_publication(github, binding, run_id, execution_id, pr_number, head
             'Latest review status no longer matches the publication')
     if not pending and binding.get('publication_finalizer'):
         intent = artifact(github, binding, 'preloop-finalize-' + execution_id + '-' + str(run_id),
-                          'preloop-review-finalize.yml', allow_failed=True, run_id=finalizer_run_id)
+                          'preloop-review-finalize.yml', run_id=finalizer_run_id)
         require(intent.get('publisher_run_id') == str(run_id) and
                 intent.get('finalizer_run_id') == finalizer_run_id and
                 intent.get('publication_receipt') == receipt,

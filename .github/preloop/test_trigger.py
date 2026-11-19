@@ -13,6 +13,19 @@ import trigger
 
 
 class TriggerTests(unittest.TestCase):
+    def test_automatic_draft_events_skip_before_privileged_trigger_work(self):
+        workflow = (Path(__file__).resolve().parents[1] / 'workflows/preloop-review-trigger.yml').read_text()
+        self.assertIn("  trigger:\n    if: github.event_name != 'pull_request_target' || "
+                      "github.event.pull_request.draft == false\n    runs-on:", workflow)
+        self.assertIn('types: [opened, synchronize, reopened, ready_for_review]', workflow)
+        # Manual dispatch retains runtime.current_pr's draft denial; it cannot
+        # use this skip to misrepresent an invalid selection as a review.
+        for event, draft, should_run in [('pull_request_target', True, False),
+                                         ('pull_request_target', False, True),
+                                         ('workflow_dispatch', None, True)]:
+            with self.subTest(event=event, draft=draft):
+                self.assertEqual(event != 'pull_request_target' or draft is False, should_run)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -91,6 +104,25 @@ class TriggerTests(unittest.TestCase):
         self.assertEqual(self.calls, [('/flows/flow/trigger', 'POST',
                                      {'pr_number': 7, 'head_sha': 'a' * 40}),
                                     ('/flows/executions/execution', 'GET', None)])
+
+    def test_merge_gate_is_pending_before_any_paid_launch(self):
+        self.binding['publication_merge_gate'] = copy.deepcopy(runtime.trust.MERGE_GATE)
+        self.store_intent()
+        def check_status(*args, **kwargs):
+            if kwargs.get('context_name') == 'Preloop merge gate':
+                self.assertEqual(self.calls, [])
+                self.assertEqual(args[3], 'pending')
+        runtime.commit_status.side_effect = check_status
+        trigger.start()
+        self.assertEqual(runtime.commit_status.call_count, 2)
+
+    def test_unconfirmed_merge_gate_pending_prevents_paid_launch(self):
+        self.binding['publication_merge_gate'] = copy.deepcopy(runtime.trust.MERGE_GATE)
+        self.store_intent()
+        runtime.commit_status.side_effect = InvalidReview('Pending status readback failed')
+        with self.assertRaises(InvalidReview):
+            trigger.start()
+        self.assertEqual(self.calls, [])
 
     def test_workflow_observes_startup_even_when_launch_step_failed_after_acceptance(self):
         workflow = Path(__file__).resolve().parents[1] / 'workflows/preloop-review-trigger.yml'
@@ -341,6 +373,18 @@ class TriggerTests(unittest.TestCase):
         with self.assertRaises(InvalidReview):
             trigger.startup()
         self.assertEqual(len(self.calls), 1)
+
+    def test_startup_version_requires_an_integer_not_an_equal_boolean_or_float(self):
+        self.store_receipt()
+        for value in (True, 1.0, "1", None):
+            with self.subTest(version=value):
+                self.detail['startup_receipt']['version'] = value
+                with self.assertRaises(InvalidReview):
+                    trigger.startup()
+                (Path(self.temp.name) / 'preloop-startup/receipt.json').unlink()
+        self.detail['startup_receipt']['version'] = 1
+        trigger.startup()
+        self.assertEqual(len(self.calls), 5)
 
     def test_startup_rejects_missing_or_revoked_proof(self):
         self.store_receipt()

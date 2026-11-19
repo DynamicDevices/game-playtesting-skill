@@ -56,7 +56,17 @@ def receipt_from_zip(data):
         require(archive.namelist() == ['receipt.json'], 'Unexpected receipt artifact files')
         return strict_json(archive.read('receipt.json'))
 
+MERGE_GATE = dict(explicit_posture_approval=True,
+    workflow_path='.github/workflows/preloop-review-merge.yml', event='workflow_run',
+    producer_path='.github/workflows/preloop-review-finalize.yml', status_context='Preloop merge gate')
+
+
 def workload_events(binding, workflow):
+    if workflow == 'preloop-review-merge.yml':
+        require(binding.get('publication_merge_gate') == MERGE_GATE,
+                'Missing exact signed merge-gate admission')
+        workload_events(binding, 'preloop-review-finalize.yml')
+        return ['workflow_run']
     if workflow == 'preloop-review-finalize.yml':
         require(binding.get('publication_finalizer') == {
             'explicit_posture_approval': True,
@@ -108,7 +118,7 @@ def verify_workload_jwt(token, jwks, binding, repository, run_id, now=None, work
     require(str(claims.get('run_id')) == str(run_id), 'Workload run mismatch')
     require(claims.get('ref') == 'refs/heads/' + binding['default_branch'], 'Untrusted workflow branch')
     require(workflow in ['preloop-review-publish.yml', 'preloop-review-trigger.yml',
-                        'preloop-review-finalize.yml'], 'Unapproved workflow')
+                        'preloop-review-finalize.yml', 'preloop-review-merge.yml'], 'Unapproved workflow')
     expected = repository + '/.github/workflows/' + workflow + '@refs/heads/' + binding['default_branch']
     require(claims.get('workflow_ref') == expected, 'Workload workflow mismatch')
     events = workload_events(binding, workflow)

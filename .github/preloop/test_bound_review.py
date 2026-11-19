@@ -106,6 +106,15 @@ class BoundReviewTests(unittest.TestCase):
                 with self.assertRaises(InvalidReview):
                     self.check()
 
+    def test_startup_version_requires_an_integer_not_an_equal_boolean_or_float(self):
+        for value in (True, 1.0, "1", None):
+            with self.subTest(version=value):
+                self.execution['startup_receipt']['version'] = value
+                with self.assertRaises(InvalidReview):
+                    self.check()
+        self.execution['startup_receipt']['version'] = 1
+        self.assertEqual(self.check()['state'], 'success')
+
     def test_completed_startup_receipt_accepts_documented_cleanup(self):
         self.execution['startup_receipt']['lease_revoked'] = True
         self.execution['startup_receipt']['agent_cli'] = {'name': 'codex', 'version': '0.153.4'}

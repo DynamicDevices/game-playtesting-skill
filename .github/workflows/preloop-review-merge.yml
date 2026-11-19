@@ -1,0 +1,39 @@
+name: Validate Preloop merge gate
+
+on:
+  workflow_run:
+    workflows: [Finalize Preloop review]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: preloop-merge-gate-${{ github.repository }}-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Validate completed Preloop delivery
+    if: github.event.workflow_run.head_branch == github.event.repository.default_branch && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      statuses: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node24
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Load exact signed service authority
+        env:
+          PRELOOP_PUBLICATION_AUTHORITY: ${{ secrets.PRELOOP_PUBLICATION_AUTHORITY }}
+          PRELOOP_PUBLICATION_SIGNATURE: ${{ secrets.PRELOOP_PUBLICATION_SIGNATURE }}
+        run: python3 -I -B .github/preloop/install_policy.py
+      - name: Admit only completed successful Preloop delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRELOOP_CI_TOKEN: ${{ secrets.PRELOOP_CI_TOKEN }}
+        run: python3 -I -B .github/preloop/bootstrap.py finalize accept

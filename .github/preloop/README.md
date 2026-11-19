@@ -162,6 +162,32 @@ been independently read back, including the current publication-run link.
 
 ## Signed policy and remaining acceptance work
 
+The delivery target is a real PR event, an independent Preloop review, passing
+required CI, and automatic merge for explicitly admitted ordinary Briar PRs.
+Failed, incomplete, placeholder or stale reviews block merging; a skipped job
+is not approval. Trust/security changes retain their specific approval. A
+bootstrap exception must be separately explicit, not inferred from a red check.
+
+Automatic merge requires the distinct `Preloop merge gate` context, not just
+the preliminary `Preloop review` records. The trigger sets it pending before
+launch. A trusted completion workflow releases it only after the actual finalizer
+is completed/successful, its exact source and durable intent are authenticated,
+the complete review/bot/check/status are independently read back, the PR remains
+current and no newer execution supersedes it. Failed/cancelled/interrupted
+finalizers cannot release it. The publisher job has a separate name,
+`Publish validated Preloop review`, to avoid colliding with its custom check.
+The merge-gate workflow receives status-write permission, not source-write or
+merge permission. GitHub's native auto-merge still requires applicable CI.
+Enable this route only with exact signed `publication_merge_gate` admission,
+the fourth workflow in live-revocation bindings and actual required-check rules.
+
+Commit-status publication performs one POST and independent combined/list
+readbacks. If exactly one endpoint lacks the posted ID or shows an older ID,
+while the other proves the exact write, it may perform one additional list then
+combined observation. Wrong commit/actor, malformed IDs, same-ID conflicts and
+visibly newer writes are not retryable. Final ID, commit, context, state, run
+URL and actor agreement remains mandatory. There is no sleep, loop or rePOST.
+
 `PRELOOP_PUBLICATION_AUTHORITY` and `PRELOOP_PUBLICATION_SIGNATURE` must preserve
 exact signed bytes. `install_policy.py` writes them only to runner-local files.
 The policy must bind repository/provider/project/principal, flow/model/config,
@@ -217,6 +243,58 @@ inspect it with the repository-bound CI identity, not the owner schema.
 Queued/failed executions do not count as running. No sleep loop, polling or
 automatic re-trigger compensates for startup timing. A live queued observation
 remains a failed startup gate requiring phase diagnosis, not successful delivery.
+
+Review publication additionally requires the exact trigger workflow to have
+completed successfully, including its `Validate native startup once` step.
+A later valid controller result cannot erase a failed, cancelled, skipped or
+unfinished trigger. The finalizer independently rechecks that trigger and its
+execution/PR/head/base binding before releasing the review gate. Explicitly
+pending startup remains permitted by the initial observation only when the
+completed result later supplies the full startup and cleanup proof. If completion
+arrives before the trigger finishes, publication fails closed; recover publication
+against the existing result after diagnosis, without another inference run.
+Only owned failure-status cleanup may read failed or still-running trigger
+receipts; it cannot publish a review or a successful gate.
+
+Finalization records its exact release attempt before touching GitHub. If any
+release write, readback or final status fails, it preserves the original failure
+and attempts to mark only its authenticated owned check as failed, then posts
+an error status even if the check correction fails. Cleanup rechecks the current
+PR, supersession, exact check/claim/revision/actor and original-or-current run
+marker; changed ownership or target evidence denies cleanup writes. The workflow
+preserves failure/attempt receipts after a failed release for explicit
+reconciliation. It does not retry release or inference. API outages, revocation,
+cancellation and runner loss can prevent cleanup or receipt upload; any partial
+visible success is not accepted delivery and must be reconciled from the saved
+intent, workflow outcome and available failure evidence.
+Final delivery also requires the exact finalizer workflow, its bound job and
+`Finalize owned review gate` step to have completed successfully. A failed
+finalizer's durable intent and visible success records cannot satisfy acceptance,
+even when API failures prevent cleanup. Failed receipts remain diagnostic only.
+
+GitHub commit-status publication performs one POST and verifies both the
+exact-commit combined status and the actor-bearing status list. If the combined
+record already exactly matches the write but the list lacks it (or still shows
+another GitHub Actions record), the helper makes one additional list read and
+then a fresh combined read. It does not sleep, loop or repeat the POST. Both
+final snapshots must agree on this write's exact ID, state, run URL and context;
+the combined commit and list actor must also match. Wrong actors, conflicting
+values on the same record, malformed evidence, combined mismatches and ongoing
+inconsistency fail closed. This tolerates one inconsistent read pair; it does
+not guarantee GitHub propagation or make failed historical triggers successful.
+
+Automatic `pull_request_target` events for draft PRs skip the trigger job before
+checkout, credentials or launch. Marking a PR ready still triggers normal review.
+A skipped job is not a passed review and does not release a review gate. Manual
+dispatch retains the helper's explicit draft/closed-PR denial. This workflow
+change only affects trusted runs after it is merged and its exact source policy
+is signed and installed; changing PR-head YAML cannot modify current base runs.
+
+The 19November review of PR20 exhausted the DD flow's300-second launch budget
+while successful model/tool calls were still occurring. Its separate proposed
+600-second native deadline remains subject to complete configuration review and
+matching signed installation gates. The hard whole-workload cutoff and terminal
+cleanup remain required; a larger deadline is not proof a review will finish.
 
 Bootstrap also needs resolution: GitHub dispatch workflows must already be on
 the default branch, but independent Preloop review is required before installation.

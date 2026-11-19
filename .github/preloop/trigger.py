@@ -136,6 +136,10 @@ def start():
                             'POST', {'command': 'stop', 'payload': None})
     runtime.current_pr(github, binding, number, head, base)
     runtime.verify_live_service(binding, workload, 'preloop-review-trigger.yml')
+    run_url = 'https://github.com/' + binding['repository'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID']
+    if permit is None and binding.get('publication_merge_gate'):
+        runtime.commit_status(github, binding, head, 'pending', run_url,
+            'Awaiting completed finalizer and independently verified review.', context_name='Preloop merge gate')
     execution = runtime.preloop('/flows/' + binding['flow_id'] + '/trigger', token,
                                 'POST', {'pr_number': number, 'head_sha': head})
     require(all(execution.get(key) == intent[key] for key in
@@ -190,7 +194,8 @@ def startup():
               'Authenticated completion must verify the receipt before publication.')
         return
     require(type(startup) is dict, 'Malformed native startup receipt')
-    require(startup.get('version') == 1 and startup.get('executor') == 'hosted' and
+    require(type(startup.get('version')) is int and startup['version'] == 1 and
+            startup.get('executor') == 'hosted' and
             ((detail['status'] == 'RUNNING' and startup.get('lease_revoked') is None) or
              (detail['status'] == 'SUCCEEDED' and startup.get('lease_revoked') is True)) and
             startup.get('commit') == receipt['head_sha'] and

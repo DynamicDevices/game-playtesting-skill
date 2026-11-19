@@ -37,6 +37,12 @@ def producer(github, binding):
                 ['execution_id', 'head_sha', 'base_sha', 'result_sha256']) and
             completion.get('status') == 'SUCCEEDED' and completion.get('result_ready') is True,
             'Publication and authenticated completion differ')
+    trigger = runtime.artifact(github, binding, 'preloop-trigger-' + eid,
+                               'preloop-review-trigger.yml')
+    require(all(trigger.get(k) == completion.get(k) for k in
+                ['execution_id', 'pr_number', 'head_sha', 'base_sha']) and
+            trigger.get('execution_id') == eid,
+            'Successful trigger and publication differ')
     number, head, base = completion['pr_number'], completion['head_sha'], completion['base_sha']
     evidence = runtime.completed_publication(github, binding, str(run_id), eid, number, head, base, pending=True)
     require(evidence['publication_receipt'] == receipt, 'Producer receipt changed')
@@ -46,6 +52,59 @@ def producer(github, binding):
 
 def intent_name(run_id, receipt):
     return 'preloop-finalize-' + receipt['execution_id'] + '-' + run_id
+
+
+def cleanup_failed_release(github, binding, receipt, completion, run_id, marker, run_url):
+    """Failure-only correction after durable ownership was verified by release.
+
+    A wrong owner, changed PR or superseding execution denies all cleanup writes.
+    Once ownership is established, a failed check PATCH must not prevent the
+    independent error-status attempt. Every write still passes runtime's live gate.
+    """
+    outcome = dict(check='not_attempted', status='not_attempted')
+    root = '/repos/' + binding['repository']
+    check_path = root + '/check-runs/' + str(receipt['check_id'])
+    head, base, number = completion['head_sha'], completion['base_sha'], completion['pr_number']
+    try:
+        runtime.current_pr(github, binding, number, head, base)
+        publisher.no_supersession(binding, os.environ['PRELOOP_CI_TOKEN'], completion)
+        actual = github(check_path)
+        text = actual.get('output', {}).get('text')
+        original_marker = marker.split('\n')[0]
+        require(actual.get('id') == receipt['check_id'] and actual.get('head_sha') == head and
+                actual.get('name') == 'Preloop review' and
+                actual.get('external_id') == 'briar-preloop:' + receipt['claim_sha256'] and
+                text in [original_marker, marker], 'Failed-release check ownership differs')
+        owner_url = (run_url if text == marker else 'https://github.com/' +
+                     binding['repository'] + '/actions/runs/' + run_id)
+        runtime.verify_check_url(actual, binding, owner_url)
+    except Exception as failure:
+        outcome['ownership_error'] = type(failure).__name__
+        return outcome
+    try:
+        github(check_path, 'PATCH', {'status': 'completed', 'conclusion': 'failure',
+            'output': {'title': 'Finalization failed; delivery is not accepted',
+                'summary': 'Partial release requires explicit reconciliation. Actions: ' + run_url,
+                'text': text}})
+        corrected = github(check_path)
+        require(corrected.get('id') == receipt['check_id'] and corrected.get('head_sha') == head and
+                corrected.get('external_id') == 'briar-preloop:' + receipt['claim_sha256'] and
+                corrected.get('output', {}).get('text') == text and
+                corrected.get('status') == 'completed' and corrected.get('conclusion') == 'failure',
+                'Failed-release check cleanup readback differs')
+        runtime.verify_check_url(corrected, binding, owner_url)
+        outcome['check'] = 'failure_confirmed'
+    except Exception as failure:
+        outcome.update(check='unconfirmed', check_error=type(failure).__name__)
+    try:
+        runtime.current_pr(github, binding, number, head, base)
+        publisher.no_supersession(binding, os.environ['PRELOOP_CI_TOKEN'], completion)
+        runtime.commit_status(github, binding, head, 'error', run_url,
+                              'Finalization failed; partial release requires reconciliation.')
+        outcome['status'] = 'error_confirmed'
+    except Exception as failure:
+        outcome.update(status='unconfirmed', status_error=type(failure).__name__)
+    return outcome
 
 
 def prepare():
@@ -85,20 +144,94 @@ def release():
     check_path = root + '/check-runs/' + str(receipt['check_id'])
     runtime.current_pr(github, binding, number, head, base)
     publisher.no_supersession(binding, os.environ['PRELOOP_CI_TOKEN'], completion)
-    github(check_path, 'PATCH', {'status': 'completed', 'conclusion': receipt['state'],
-        'details_url': run_url, 'output': {'title': 'Completed publisher and durable review verified',
-        'summary': receipt['review_url'] + '\n\nActions: ' + run_url, 'text': marker}})
-    actual = github(check_path)
-    require(actual.get('status') == 'completed' and actual.get('conclusion') == receipt['state'] and
-            actual.get('head_sha') == head and actual.get('id') == receipt['check_id'] and
-            actual.get('external_id') == 'briar-preloop:' + receipt['claim_sha256'] and
-            actual.get('app', {}).get('slug') == 'github-actions' and
-            actual.get('output', {}).get('text') == marker, 'Finalized check readback mismatch')
-    runtime.verify_check_url(actual, binding, run_url)
-    runtime.current_pr(github, binding, number, head, base)
+    # Record the exact attempt before a possibly ambiguous GitHub write. This
+    # never authorizes a replay; the existing durable intent remains single-use.
+    runtime.write_receipt(Path(os.environ['RUNNER_TEMP']) / 'preloop-finalize-release', intent)
+    try:
+        github(check_path, 'PATCH', {'status': 'completed', 'conclusion': receipt['state'],
+            'details_url': run_url, 'output': {'title': 'Completed publisher and durable review verified',
+            'summary': receipt['review_url'] + '\n\nActions: ' + run_url, 'text': marker}})
+        actual = github(check_path)
+        require(actual.get('status') == 'completed' and actual.get('conclusion') == receipt['state'] and
+                actual.get('head_sha') == head and actual.get('id') == receipt['check_id'] and
+                actual.get('external_id') == 'briar-preloop:' + receipt['claim_sha256'] and
+                actual.get('app', {}).get('slug') == 'github-actions' and
+                actual.get('output', {}).get('text') == marker, 'Finalized check readback mismatch')
+        runtime.verify_check_url(actual, binding, run_url)
+        runtime.current_pr(github, binding, number, head, base)
+        publisher.no_supersession(binding, os.environ['PRELOOP_CI_TOKEN'], completion)
+        runtime.commit_status(github, binding, head, receipt['state'], run_url,
+                              'Original publisher completed; durable review independently verified.')
+    except Exception as failure:
+        # Never replace the original release exception with cleanup/evidence
+        # errors, nor include arbitrary exception text that might contain secrets.
+        report = dict(intent, failure_type=type(failure).__name__)
+        try:
+            report['cleanup'] = cleanup_failed_release(
+                github, binding, receipt, completion, run_id, marker, run_url)
+        except Exception as cleanup_failure:
+            report['cleanup'] = dict(unconfirmed=type(cleanup_failure).__name__)
+        try:
+            runtime.write_receipt(Path(os.environ['RUNNER_TEMP']) / 'preloop-finalize-failure', report)
+        except Exception as evidence_failure:
+            report['evidence_error'] = type(evidence_failure).__name__
+        try:
+            print(json.dumps(report, sort_keys=True), file=sys.stderr)
+        except Exception:
+            pass  # A broken log stream must not replace the release failure.
+        raise
+
+
+def accept():
+    """Release merge admission only AFTER the real finalizer completed.
+
+    This status is a separate required GitHub context. Earlier green review
+    records cannot release it, even if finalization is cancelled after writing.
+    The reviewer/finalizer never receives source or merge-write privileges.
+    """
+    binding, _, github = runtime.context('preloop-review-merge.yml')
+    require(binding.get('publication_merge_gate') == runtime.trust.MERGE_GATE,
+            'Merge gate not explicitly admitted')
+    require(os.environ.get('GITHUB_RUN_ATTEMPT') == '1', 'Merge admission retry requires reconciliation')
+    event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+    require(os.environ['GITHUB_EVENT_NAME'] == 'workflow_run' and event.get('action') == 'completed' and
+            event.get('repository', {}).get('id') == binding['repository_id'], 'Wrong merge-gate event')
+    hinted = event.get('workflow_run', {})
+    finalizer_id = hinted.get('id')
+    require(type(finalizer_id) is int and finalizer_id > 0 and
+            hinted.get('path', '').split('@')[0] == '.github/workflows/' + WORKFLOW,
+            'Wrong finalizer completion hint')
+    root = '/repos/' + binding['repository']
+    run = github(root + '/actions/runs/' + str(finalizer_id))
+    require(run.get('id') == finalizer_id and run.get('repository', {}).get('id') == binding['repository_id'] and
+            run.get('path', '').split('@')[0] == '.github/workflows/' + WORKFLOW and
+            run.get('head_branch') == binding['default_branch'] and run.get('event') == 'workflow_run' and
+            run.get('status') == 'completed' and run.get('conclusion') == 'success' and
+            run.get('run_attempt') == 1, 'Finalizer did not complete successfully')
+    rows = runtime.github_pages(github, root + '/actions/runs/' + str(finalizer_id) + '/artifacts', 'artifacts')
+    intents = [row for row in rows if re.fullmatch(
+        r'preloop-finalize-[0-9a-f-]{36}-[1-9][0-9]*', row.get('name', ''))]
+    require(len(intents) == 1 and not intents[0].get('expired'), 'Missing unique finalization intent')
+    intent = runtime.artifact(github, binding, intents[0]['name'], WORKFLOW, run_id=str(finalizer_id))
+    receipt, completion = intent['publication_receipt'], intent['completion']
+    publisher_id = intent['publisher_run_id']
+    require(intent.get('finalizer_run_id') == str(finalizer_id) and
+            intents[0]['name'] == intent_name(publisher_id, receipt) and
+            all(receipt.get(k) == completion.get(k) for k in
+                ['execution_id', 'head_sha', 'base_sha', 'result_sha256']) and
+            completion.get('status') == 'SUCCEEDED' and completion.get('result_ready') is True,
+            'Finalization completion binding changed')
+    eid, number, head, base = (completion[k] for k in ['execution_id', 'pr_number', 'head_sha', 'base_sha'])
+    proof = runtime.completed_publication(github, binding, publisher_id, eid, number, head, base)
+    require(all(proof.get(k) is True for k in
+                ['delivery_verified', 'actions_run_verified', 'actions_check_verified', 'review_approved']) and
+            proof.get('finalizer_run_id') == str(finalizer_id) and proof.get('review_state') == 'success',
+            'Completed review does not admit merging')
     publisher.no_supersession(binding, os.environ['PRELOOP_CI_TOKEN'], completion)
-    runtime.commit_status(github, binding, head, receipt['state'], run_url,
-                          'Original publisher completed; durable review independently verified.')
+    runtime.current_pr(github, binding, number, head, base)
+    run_url = 'https://github.com/' + binding['repository'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID']
+    runtime.commit_status(github, binding, head, 'success', run_url,
+        'Completed finalizer, exact review and bot publication verified.', context_name='Preloop merge gate')
 
 
 if __name__ == '__main__':
@@ -106,5 +239,7 @@ if __name__ == '__main__':
         prepare()
     elif sys.argv[1:] == ['release']:
         release()
+    elif sys.argv[1:] == ['accept']:
+        accept()
     else:
         raise SystemExit('Unknown finalization phase')

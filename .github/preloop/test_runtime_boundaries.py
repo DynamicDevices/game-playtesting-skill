@@ -89,6 +89,50 @@ class RuntimeBoundaryTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs), self.assertRaises(InvalidReview):
                 self.artifact(**kwargs)
 
+    def test_finalizer_delivery_artifact_requires_successful_completed_release(self):
+        binding = dict(self.binding, publication_finalizer={'explicit_posture_approval': True})
+        name = 'preloop-finalize-execution-12'
+        row = dict(id=1, name=name, expired=False, workflow_run={'id': 13})
+        run = dict(id=13, path='.github/workflows/preloop-review-finalize.yml',
+                   event='workflow_run', head_branch='main', head_sha='a' * 40,
+                   status='completed', conclusion='success')
+        job = dict(name='Finalize Preloop review', status='completed', conclusion='success',
+                   run_id=13, head_sha='a' * 40, steps=[
+            dict(name='Prepare completed publisher finalization', status='completed', conclusion='success'),
+            dict(name='Preserve finalization intent', status='completed', conclusion='success'),
+            dict(name='Finalize owned review gate', status='completed', conclusion='success')])
+        jobs = [job]
+        def pages(_github, _path, field):
+            return jobs if field == 'jobs' else [row]
+        with patch.object(runtime, 'github_pages', side_effect=pages), \
+             patch.object(runtime.trust, 'download_trigger_artifact', return_value={'safe': True}), \
+             patch.object(runtime.trust, 'verify_sources'):
+            def read(**kwargs):
+                return runtime.artifact(lambda _path: run, binding, name,
+                                        'preloop-review-finalize.yml', run_id='13', **kwargs)
+            self.assertEqual(read(), {'safe': True})
+            for changed in [dict(status='in_progress'), dict(conclusion='failure'),
+                            dict(conclusion='cancelled'), dict(conclusion='timed_out')]:
+                saved = dict(run); run.update(changed)
+                with self.subTest(run=changed), self.assertRaises(InvalidReview):
+                    read()
+                run = saved
+            for changed in [dict(status='in_progress'), dict(conclusion='failure'),
+                            dict(run_id=99), dict(head_sha='b' * 40),
+                            dict(steps=job['steps'][:2])]:
+                jobs = [dict(job, **changed)]
+                with self.subTest(job=changed), self.assertRaises(InvalidReview):
+                    read()
+            for conclusion in ['failure', 'cancelled', 'skipped', None]:
+                jobs = [dict(job, steps=job['steps'][:2] + [dict(
+                    name='Finalize owned review gate', status='completed', conclusion=conclusion)])]
+                with self.subTest(release=conclusion), self.assertRaises(InvalidReview):
+                    read()
+            # Explicit diagnostic recovery can inspect failed evidence, never
+            # through completed_publication's ordinary acceptance call.
+            run['conclusion'] = 'failure'
+            self.assertEqual(read(allow_failed=True), {'safe': True})
+
 
 class TriggerEventTests(unittest.TestCase):
     def test_records_exact_opened_event_and_denies_mismatched_pr(self):
@@ -154,7 +198,7 @@ class CompletedPublicationTests(unittest.TestCase):
                             review_body_sha256=hashlib.sha256(self.body.encode()).hexdigest())
         self.jobs = [dict(id=n, name=name, run_id=12, head_sha=self.code,
                           status='completed', conclusion='success') for n, name in
-                     [(1, 'Authenticate completion'), (2, 'Preloop review')]]
+                     [(1, 'Authenticate completion'), (2, 'Publish validated Preloop review')]]
         self.jobs[1]['steps'] = [dict(name=name, status='completed', conclusion='success') for name in
             ['Validate, publish and independently read back', 'Preserve actual publication receipt']]
         self.review = dict(id=22, commit_id=self.head, state='COMMENTED', submitted_at='now',
@@ -226,6 +270,8 @@ class CompletedPublicationTests(unittest.TestCase):
         self.statuses[0].update(id=34, target_url=final_url)
         intent = dict(publisher_run_id='12', finalizer_run_id='13', publication_receipt=self.receipt)
         def artifact(*args, **kwargs):
+            if args[3] == 'preloop-review-finalize.yml':
+                self.assertFalse(kwargs.get('allow_failed', False))
             return intent if args[3] == 'preloop-review-finalize.yml' else self.receipt
         with patch.object(runtime, 'artifact', side_effect=artifact), patch.object(runtime, 'current_pr'):
             self.assertTrue(runtime.completed_publication(self.github, self.binding, 12, self.eid,
