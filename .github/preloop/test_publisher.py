@@ -1,5 +1,6 @@
 """Exercise the actual publisher entry point with isolated fake APIs."""
 import copy
+import hashlib
 import io
 import json
 import os
@@ -47,6 +48,7 @@ class PublisherTests(unittest.TestCase):
         self.wakes = [dict(name='preloop-wake-' + self.eid, expired=False, workflow_run={'id': 12})]
         self.readback_actor = 'github-actions[bot]'
         self.check_actor = 'github-actions'
+        self.normalize_check_url = False
         self.event = Path(self.temp.name) / 'event.json'
         self.event.write_text('{}')
         env = patch.dict(os.environ, GITHUB_REPOSITORY='example/repository', GH_TOKEN='fixture',
@@ -58,7 +60,7 @@ class PublisherTests(unittest.TestCase):
     def github(self, path, method='GET', body=None):
         self.calls.append((path, method, body))
         if path.endswith('/check-runs') and method == 'POST':
-            value = dict(body, id=11 + len(self.checks), app={'slug': self.check_actor})
+            value = dict(body, id=11 + len(self.checks), app={'id': 15368, 'slug': self.check_actor})
             self.checks.append(value)
             if self.fail_check:
                 raise OSError('Synthetic lost check response')
@@ -67,6 +69,8 @@ class PublisherTests(unittest.TestCase):
             value = next(row for row in self.checks if row['id'] == int(path.rsplit('/', 1)[1]))
             if method == 'PATCH':
                 value.update(body)
+            if method == 'GET' and self.normalize_check_url:
+                return dict(value, details_url='https://github.com/example/repository/runs/' + str(value['id']))
             return value
         if path.endswith('/reviews') and method == 'POST':
             if self.fail_review:
@@ -131,6 +135,28 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(self.statuses[0]['state'], 'success')
         self.assertEqual(self.checks[0]['conclusion'], 'success')
         self.assertIn(self.eid, self.reviews[0]['body'])
+
+    def test_github_normalized_get_reuses_review_and_check_after_readback_failure(self):
+        self.normalize_check_url = True
+        self.binding['publication_finalizer'] = {'explicit_posture_approval': True}
+        self.assertEqual(self.run_publisher(), 0)
+        self.checks[0].update(status='completed', conclusion='failure')
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, GITHUB_RUN_ID='13', RUNNER_TEMP=folder):
+            self.assertEqual(self.run_publisher(), 0)
+        self.assertEqual(len(self.reviews), 1)
+        self.assertEqual(len(self.checks), 1)
+        self.assertEqual(self.checks[0]['status'], 'in_progress')
+        self.assertIsNone(self.checks[0].get('conclusion'))
+        self.assertIn('/actions/runs/13', self.checks[0]['output']['summary'])
+
+    def test_late_failure_accepts_normalized_url_but_not_another_producer_receipt(self):
+        self.normalize_check_url = True
+        self.assertEqual(self.run_publisher(), 0)
+        with patch.dict(os.environ, GITHUB_RUN_ID='13'), self.assertRaises(InvalidReview):
+            self.run_publisher(entry=publisher.publish_error_status)
+        self.run_publisher(entry=publisher.publish_error_status)
+        self.assertEqual(self.checks[0]['conclusion'], 'failure')
+        self.assertEqual(self.statuses[0]['state'], 'error')
         self.assertTrue((Path(self.temp.name) / 'preloop-publication/receipt.json').exists())
 
     def test_completion_enabled_publisher_never_releases_green_itself(self):
@@ -248,6 +274,37 @@ class PublisherTests(unittest.TestCase):
         self.assertIn('not approval against the advanced target', self.reviews[0]['body'])
         receipt = json.loads((Path(self.temp.name) / 'preloop-publication/receipt.json').read_text())
         self.assertEqual(receipt['historical_target_sha'], 'e' * 40)
+
+    def test_exact_existing_historical_body_survives_advanced_repair_target_without_post(self):
+        self.configure_recovery()
+        recovery = self.binding['publication_recovery']
+        recovery['current_target_sha'] = 'e' * 40
+        self.normalize_check_url = True
+        with patch.dict(os.environ, GITHUB_EVENT_NAME='workflow_dispatch'):
+            self.assertEqual(self.run_publisher(), 0)
+        body = self.reviews[0]['body']
+        self.checks[0].update(status='completed', conclusion='failure')
+        recovery['current_target_sha'] = 'f' * 40
+        recovery['existing_publication'] = dict(review_id=22, check_id=11,
+            claim_sha256=self.checks[0]['external_id'].split(':', 1)[1],
+            body_sha256=hashlib.sha256(body.encode()).hexdigest(), original_target_sha='e' * 40)
+        self.binding['publication_finalizer'] = {'explicit_posture_approval': True}
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, GITHUB_RUN_ID='13', RUNNER_TEMP=folder):
+            self.assertEqual(self.run_publisher(), 0)
+            receipt = json.loads((Path(folder) / 'preloop-publication/receipt.json').read_text())
+            self.assertEqual(receipt['historical_target_sha'], 'f' * 40)
+            self.assertEqual(receipt['review_body_sha256'], recovery['existing_publication']['body_sha256'])
+        self.assertEqual(self.reviews[0]['body'], body)
+        self.assertEqual(len(self.reviews), 1)
+        self.assertEqual(len(self.checks), 1)
+        for key, value in [('body_sha256', '0' * 64), ('original_target_sha', 'a' * 40),
+                           ('review_id', 23), ('check_id', 12), ('claim_sha256', '0' * 64)]:
+            original = recovery['existing_publication'][key]
+            recovery['existing_publication'][key] = value
+            calls = len(self.calls)
+            with self.subTest(key=key), self.assertRaises(InvalidReview): self.run_publisher()
+            self.assertTrue(all(method == 'GET' for _, method, _ in self.calls[calls:]))
+            recovery['existing_publication'][key] = original
 
     def test_late_upload_failure_replaces_preliminary_green_without_reposting(self):
         self.assertEqual(self.run_publisher(), 0)

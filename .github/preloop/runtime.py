@@ -14,6 +14,26 @@ from review_contract import require
 from completion_contract import strict_json
 
 
+def verify_check_url(check, binding, run_url):
+    """GitHub may replace Actions-app details_url with the check's own URL.
+
+    Neither URL proves producer ownership: callers must independently validate
+    the authenticated run, exact claim and durable publication evidence.
+    """
+    root = 'https://github.com/' + binding['repository']
+    require(type(run_url) is str and
+            re.fullmatch(re.escape(root) + r'/actions/runs/[1-9][0-9]*', run_url),
+            'Invalid authenticated Actions run URL')
+    check_id = check.get('id')
+    require(type(check_id) is int and check_id > 0 and
+            check.get('app', {}).get('id') == 15368 and
+            type(check.get('app', {}).get('id')) is int and
+            check.get('app', {}).get('slug') == 'github-actions',
+            'Wrong review check actor or ID')
+    require(check.get('details_url') in (run_url, root + '/runs/' + str(check_id)),
+            'Wrong review check run link')
+
+
 def verify_live_service(binding, workload, workflow):
     """Fail-closed online suspension gate; no cached allow or signing-key claims.
 
@@ -431,6 +451,14 @@ def completed_publication(github, binding, run_id, execution_id, pr_number, head
             hashlib.sha256((review.get('body') or '').encode('utf-8')).hexdigest() ==
                 receipt.get('review_body_sha256'), 'Final review readback changed')
     check = github(root + '/check-runs/' + str(receipt['check_id']))
+    existing = (binding.get('publication_recovery') or {}).get('existing_publication')
+    if existing is not None:
+        require(type(existing) is dict and
+                receipt['review_id'] == existing.get('review_id') and
+                receipt['check_id'] == existing.get('check_id') and
+                receipt['claim_sha256'] == existing.get('claim_sha256') and
+                receipt['review_body_sha256'] == existing.get('body_sha256'),
+                'Completed recovery differs from signed existing publication')
     finalizer_run_id, gate_url = None, run_url
     if not pending and binding.get('publication_finalizer'):
         pattern = r'<!-- briar-preloop-finalized:' + str(run_id) + r':([1-9][0-9]*):' + receipt['claim_sha256'] + r' -->'
@@ -441,10 +469,11 @@ def completed_publication(github, binding, run_id, execution_id, pr_number, head
     require(check.get('id') == receipt['check_id'] and check.get('head_sha') == head and
             check.get('name') == 'Preloop review' and
             check.get('status') == ('in_progress' if pending else 'completed') and
-            check.get('conclusion') == (None if pending else state) and check.get('details_url') == gate_url and
+            check.get('conclusion') == (None if pending else state) and
             check.get('app', {}).get('slug') == 'github-actions' and
             check.get('external_id') == 'briar-preloop:' + receipt['claim_sha256'],
             'Final check readback changed')
+    verify_check_url(check, binding, gate_url)
     statuses = github_pages(github, root + '/commits/' + head + '/statuses')
     latest = next((row for row in statuses if row.get('context') == 'Preloop review'), None)
     require(latest and (bool(finalizer_run_id) or latest.get('id') == receipt['status_id']) and
