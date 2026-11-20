@@ -200,6 +200,43 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(self.statuses[0]['state'], 'error')
         self.assertEqual(len(self.reviews), 1)
 
+    def test_unconfirmed_check_correction_still_attempts_owned_error_status(self):
+        self.assertEqual(self.run_publisher(), 0)
+        original = self.github
+        def request(path, method='GET', body=None):
+            if '/check-runs/' in path and method == 'PATCH':
+                return dict(self.checks[0], **body)  # Successful response, no persisted change.
+            return original(path, method, body)
+        with patch.object(self, 'github', side_effect=request):
+            with self.assertRaisesRegex(InvalidReview, 'correction readback differs'):
+                self.run_publisher(entry=publisher.publish_error_status)
+        self.assertEqual(self.statuses[0]['state'], 'error')
+        self.assertEqual(self.checks[0]['conclusion'], 'success')
+
+    def test_corrected_check_readback_revalidates_ownership_and_url(self):
+        self.assertEqual(self.run_publisher(), 0)
+        for field, value in [('id', 999), ('head_sha', 'b' * 40),
+                             ('name', 'Other check'), ('external_id', 'other'),
+                             ('app', {'slug': 'github-actions', 'id': 999}),
+                             ('output', {'text': 'other marker'}),
+                             ('details_url', 'https://example.invalid/other')]:
+            with self.subTest(field=field):
+                self.checks[0].update(status='completed', conclusion='success')
+                original = self.github
+                corrected = False
+                def request(path, method='GET', body=None):
+                    nonlocal corrected
+                    result = original(path, method, body)
+                    if '/check-runs/' in path and method == 'PATCH':
+                        corrected = True
+                    if '/check-runs/' in path and method == 'GET' and corrected:
+                        return dict(result, **{field: value})
+                    return result
+                with patch.object(self, 'github', side_effect=request):
+                    with self.assertRaises(InvalidReview):
+                        self.run_publisher(entry=publisher.publish_error_status)
+                self.assertEqual(self.statuses[0]['state'], 'error')
+
     def test_failed_check_correction_cannot_write_error_after_supersession(self):
         self.assertEqual(self.run_publisher(), 0)
         original = self.github

@@ -356,6 +356,18 @@ def publish_error_status():
                     'output': {'title': 'Publisher workflow failed after review publication',
                                'summary': 'No completed delivery acceptance; reconcile durable evidence.',
                                'text': check['output']['text']}})
+                corrected = github(check_path)
+                require(corrected.get('id') == recorded['check_id'] and
+                        corrected.get('head_sha') == completion['head_sha'] and
+                        corrected.get('name') == 'Preloop review' and
+                        corrected.get('app', {}).get('slug') == 'github-actions' and
+                        corrected.get('app', {}).get('id') == check.get('app', {}).get('id') and
+                        corrected.get('external_id') == 'briar-preloop:' + claim and
+                        corrected.get('output', {}).get('text') == check['output']['text'] and
+                        corrected.get('status') == 'completed' and
+                        corrected.get('conclusion') == 'failure',
+                        'Late-failure check correction readback differs')
+                runtime.verify_check_url(corrected, binding, recorded_run_url)
             except Exception as error:
                 correction_error = error
                 print('Late-failure check correction unconfirmed: ' + type(error).__name__, file=sys.stderr)
