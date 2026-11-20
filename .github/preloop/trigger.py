@@ -152,10 +152,10 @@ def start():
     runtime.output(execution_id=execution['id'])
     runtime.current_pr(github, binding, number, head, base)
     run_url = 'https://github.com/' + binding['repository'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID']
-    if permit is None:
+    if permit is None and not binding.get('publication_merge_gate'):
         runtime.commit_status(github, binding, head, 'pending', run_url,
                               'Native review accepted; awaiting authenticated completion.')
-    else:
+    elif permit is not None:
         print('Diagnostic only: no PR status or review publication is permitted.')
 
 

@@ -51,4 +51,7 @@ success must not be reported as a passed end-to-end test.
 On failure, retain the first failed execution and identify its failed phase.
 Do not repeat a paid review without a concrete correction and the required
 authority. Use authenticated completion events rather than repeated status
-polling. Leave merging to Alex; a review verdict is not merge authority.
+polling. For explicitly admitted ordinary Briar PRs, use signed automatic-merge
+authority and GitHub's enforced `Preloop merge gate`, required CI and strict
+up-to-date-base checks. A review verdict alone is not merge authority. Trust,
+security and production changes retain their separate explicit approval.

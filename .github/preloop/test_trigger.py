@@ -114,7 +114,11 @@ class TriggerTests(unittest.TestCase):
                 self.assertEqual(args[3], 'pending')
         runtime.commit_status.side_effect = check_status
         trigger.start()
-        self.assertEqual(runtime.commit_status.call_count, 2)
+        self.assertEqual(runtime.commit_status.call_count, 1)
+        self.assertEqual(runtime.commit_status.call_args.kwargs['context_name'], 'Preloop merge gate')
+        runtime.output.assert_called_with(execution_id='execution')
+        trigger.startup()
+        self.assertEqual(self.calls[-1], ('/flows/executions/execution', 'GET', None))
 
     def test_unconfirmed_merge_gate_pending_prevents_paid_launch(self):
         self.binding['publication_merge_gate'] = copy.deepcopy(runtime.trust.MERGE_GATE)

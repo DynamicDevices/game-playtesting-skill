@@ -14,5 +14,10 @@ also need a static skill scan and the repository's applicable review gates.
 
 Sign commits using your approved signing setup. Disclose agent assistance using
 an `Assisted-by:` trailer and visible PR disclosure, not an AI co-author identity.
-Alex retains manual merges. Missing review integration is a reported gap, never
-a reason to create a green status, bypass review or invent another review flow.
+Ordinary Briar-created PRs use authorised automatic merging after genuine
+same-head independent Preloop review, completed-finalizer merge admission and
+required CI pass. The branch must be up to date with its reviewed target; a
+changed base requires an updated candidate and fresh review. Trust/security
+changes retain explicit approval. Missing or failed review integration blocks
+ordinary merging; never create a fake green status, bypass review or invent
+another review flow.

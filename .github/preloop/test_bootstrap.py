@@ -30,6 +30,12 @@ class BootstrapTests(unittest.TestCase):
             json.dumps({'publisher_authority': authority}))
         (root / '.github/preloop-publication-authority.json.sig').write_text('synthetic-signature')
         (root / '.github/preloop-publication-key.pub').write_text('synthetic-public-key')
+        key = (root / '.github/preloop-publication-key.pub').read_bytes()
+        authority['files']['.github/preloop-publication-key.pub'] = hashlib.sha256(key).hexdigest()
+        authority['git_blobs']['.github/preloop-publication-key.pub'] = hashlib.sha1(
+            b'blob ' + str(len(key)).encode() + b'\0' + key).hexdigest()
+        (root / '.github/preloop-publication-authority.json').write_text(
+            json.dumps({'publisher_authority': authority}))
         return root, authority
 
     def verified(self, root, signature=0):
@@ -53,6 +59,24 @@ class BootstrapTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'signature'): self.verified(root, signature=1)
             (root / '.github/preloop/bootstrap.py').write_text('changed')
             with self.assertRaisesRegex(ValueError, 'Unapproved source'): self.verified(root)
+
+    def test_appended_key_rejected_before_signature_verification(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root, _ = self.fixture(folder)
+            (root / '.github/preloop-publication-key.pub').write_text(
+                'synthetic-public-key\najlennon@dynamicdevices.co.uk attacker-key\n')
+            with self.assertRaisesRegex(ValueError, 'exactly one public key'):
+                self.verified(root)
+
+    def test_public_key_must_be_in_signed_manifest(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root, authority = self.fixture(folder)
+            for name in ['files', 'git_blobs']:
+                authority[name].pop('.github/preloop-publication-key.pub')
+            (root / '.github/preloop-publication-authority.json').write_text(
+                json.dumps({'publisher_authority': authority}))
+            with self.assertRaisesRegex(ValueError, 'Incomplete source manifest'):
+                self.verified(root)
 
     def test_missing_manifest_paths_and_symlink_are_rejected(self):
         with tempfile.TemporaryDirectory() as folder:

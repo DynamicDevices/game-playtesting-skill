@@ -37,15 +37,18 @@ def verified_sources(root):
     raw = regular(root, '.github/preloop-publication-authority.json')
     signature = regular(root, '.github/preloop-publication-authority.json.sig')
     key = regular(root, '.github/preloop-publication-key.pub')
+    key_lines = [line.strip() for line in key.splitlines() if line.strip()]
+    require(len(key_lines) == 1, 'Authority must contain exactly one public key')
+    verified_key = key_lines[0]
     with tempfile.TemporaryDirectory(prefix='preloop-signature-') as folder:
         folder = Path(folder)
         public = folder / 'key.pub'
-        public.write_bytes(key)
+        public.write_bytes(verified_key + b'\n')
         observed = subprocess.check_output(['/usr/bin/ssh-keygen', '-lf', str(public), '-E', 'sha256'],
                                            text=True, timeout=15).split()[1]
         require(observed == KEY, 'Authority signer changed')
         signers = folder / 'signers'
-        signers.write_bytes(b'ajlennon@dynamicdevices.co.uk ' + key.strip() + b'\n')
+        signers.write_bytes(b'ajlennon@dynamicdevices.co.uk ' + verified_key + b'\n')
         detached = folder / 'signature'
         detached.write_bytes(signature)
         result = subprocess.run(['/usr/bin/ssh-keygen', '-Y', 'verify', '-f', str(signers),
@@ -61,7 +64,8 @@ def verified_sources(root):
             authority['non_delegable'] is True, 'Authority expired or delegable')
     files, blobs = authority['files'], authority['git_blobs']
     require(type(files) is dict and type(blobs) is dict and files and
-            set(files) == set(blobs) and '.github/preloop/bootstrap.py' in files,
+            set(files) == set(blobs) and '.github/preloop/bootstrap.py' in files and
+            '.github/preloop-publication-key.pub' in files,
             'Incomplete source manifest')
     verified = {}
     for rel, expected in files.items():
