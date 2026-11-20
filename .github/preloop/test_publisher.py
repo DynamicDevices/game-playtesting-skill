@@ -622,7 +622,10 @@ class PublisherTests(unittest.TestCase):
         with self.assertRaises(InvalidReview):
             self.run_publisher()
         self.assertEqual(self.statuses, [])
-        self.assertEqual(self.checks[0]['conclusion'], 'failure')
+        # A mismatched owner must not receive a cleanup write, even a failure.
+        self.assertFalse(any(method == 'PATCH' and body.get('conclusion') == 'failure'
+                             for path, method, body in self.calls
+                             if '/check-runs/' in path))
 
     def test_ambiguous_send_is_not_repeated(self):
         self.fail_review = True
@@ -696,7 +699,8 @@ class PublisherTests(unittest.TestCase):
             with self.assertRaisesRegex(InvalidReview, 'Synthetic ambiguous send'):
                 self.run_publisher(entry=publisher.run_publication)
         self.assertEqual(self.failure_receipt()['failure_type'], 'InvalidReview')
-        self.assertIn('failure check was not confirmed: OSError', errors.getvalue())
+        self.assertIn('Publication failure check was not confirmed:', errors.getvalue())
+        self.assertIn('"check_error": "OSError"', errors.getvalue())
 
     def test_duplicate_or_substituted_check_intent_blocks_recovery(self):
         self.run_publisher()

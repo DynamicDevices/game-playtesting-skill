@@ -109,6 +109,47 @@ def initial_check_attempt(github, binding, completion, receipt):
             'Reconciled completion wake changed')
 
 
+def cleanup_failed_publication(github, binding, token, completion, check_id, claim, marker, run_url):
+    """Correct only the current, unsuperseded check that this publication owns."""
+    outcome = {'check': 'not_attempted'}
+    path = '/repos/' + binding['repository'] + '/check-runs/' + str(check_id)
+    try:
+        runtime.current_pr(github, binding, completion['pr_number'],
+                           completion['head_sha'], completion['base_sha'])
+        no_supersession(binding, token, completion)
+        actual = github(path)
+        require(actual.get('id') == check_id and
+                actual.get('head_sha') == completion['head_sha'] and
+                actual.get('name') == 'Preloop review' and
+                actual.get('app', {}).get('slug') == 'github-actions' and
+                actual.get('external_id') == 'briar-preloop:' + claim and
+                actual.get('output', {}).get('text') == marker,
+                'Publication failure check ownership differs')
+        runtime.verify_check_url(actual, binding, run_url)
+    except Exception as failure:
+        outcome['ownership_error'] = type(failure).__name__
+        return outcome
+    try:
+        github(path, 'PATCH', {'status': 'completed', 'conclusion': 'failure',
+            'output': {'title': 'Publication failed',
+                'summary': 'Reconcile saved intent before any resend.', 'text': marker}})
+        corrected = github(path)
+        require(corrected.get('id') == check_id and
+                corrected.get('head_sha') == completion['head_sha'] and
+                corrected.get('name') == 'Preloop review' and
+                corrected.get('app', {}).get('slug') == 'github-actions' and
+                corrected.get('external_id') == 'briar-preloop:' + claim and
+                corrected.get('output', {}).get('text') == marker and
+                corrected.get('status') == 'completed' and
+                corrected.get('conclusion') == 'failure',
+                'Publication failure cleanup readback differs')
+        runtime.verify_check_url(corrected, binding, run_url)
+        outcome['check'] = 'failure_confirmed'
+    except Exception as failure:
+        outcome.update(check='unconfirmed', check_error=type(failure).__name__)
+    return outcome
+
+
 def publish():
     binding, _workload, github = runtime.context('preloop-review-publish.yml')
     event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
@@ -248,10 +289,11 @@ def publish():
     except Exception:
         try:
             if not retained:
-                github(root + '/check-runs/' + str(check['id']), 'PATCH', {
-                    'status': 'completed', 'conclusion': 'failure',
-                    'output': {'title': 'Publication failed', 'summary': 'Reconcile saved intent before any resend.',
-                               'text': marker}})
+                outcome = cleanup_failed_publication(github, binding, token, completion,
+                    check['id'], proof['claim_sha256'], marker, run_url)
+                if outcome['check'] != 'failure_confirmed':
+                    print('Publication failure check was not confirmed: ' +
+                          json.dumps(outcome, sort_keys=True), file=sys.stderr)
         except Exception as secondary:
             print('Publication failure check was not confirmed: ' + type(secondary).__name__,
                   file=sys.stderr)

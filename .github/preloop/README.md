@@ -304,15 +304,25 @@ while successful model/tool calls were still occurring. Its separate proposed
 matching signed installation gates. The hard whole-workload cutoff and terminal
 cleanup remain required; a larger deadline is not proof a review will finish.
 
-Bootstrap also needs resolution: GitHub dispatch workflows must already be on
-the default branch, but independent Preloop review is required before installation.
-The selected project grant permits bootstrap installation only after Alex's
-actual exact-candidate correctness review plus independent security review by
-the identified existing DD Sandchest service. Sandchest excludes correctness;
-neither volunteering to review nor signing a grant is a review verdict.
-Both reviews, required CI, accepted revocation and final signed publisher policies
-must precede installation. No unreviewed self-installation, synthetic trigger commit, extra flow,
-manual green status or review waiver is an acceptable workaround.
+GitHub dispatch workflows must already be on the default branch. A repair of
+the installed review gate does not authorise bypassing it: any exceptional
+installation route needs its own exact signed scope, independent correctness
+and security acceptance of the complete privileged source and installer, real
+CI and matching signed runtime source bindings. A signature is not a review
+verdict. Earlier exceptions do not apply to later PRs. Ordinary delivery still
+requires the installed automated review and completed-finalizer merge gate;
+source review or a desktop status cannot substitute for that live acceptance.
+
+Canonical source review requires an up-to-date branch: target tip must equal
+the merge base. If the target advances, update the branch and review the new
+candidate. Binary diffs are explicitly refused because this text-only route
+does not contain the binary patch bytes; an incomplete diff cannot pass.
+
+Both signature loaders accept exactly one nonblank pinned public-key line and
+require the key in the signed source manifest. Failure cleanup revalidates the
+current revision, supersession and exact check ownership before any correction;
+a stale or differently owned check receives no cleanup write. Failed or
+unconfirmed cleanup remains visible and cannot replace the original failure.
 
 ## Offline regression tests
 

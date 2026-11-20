@@ -156,12 +156,18 @@ def binding_from_proof(package, root):
 def load_authority(folder, repository, now=None):
     folder = Path(folder)
     raw = (folder / 'preloop-publication-authority.json').read_bytes()
-    key = folder / 'preloop-publication-key.pub'
-    fingerprint = subprocess.check_output(['ssh-keygen', '-lf', str(key)], text=True).split()[1]
-    require(fingerprint == KEY, 'Publisher authority key changed')
+    key = (folder / 'preloop-publication-key.pub').read_bytes()
+    key_lines = [line.strip() for line in key.splitlines() if line.strip()]
+    require(len(key_lines) == 1, 'Publisher authority must contain exactly one public key')
+    verified_key = key_lines[0]
     with tempfile.TemporaryDirectory() as temp:
+        public = Path(temp) / 'key.pub'
+        public.write_bytes(verified_key + b'\n')
+        fingerprint = subprocess.check_output(['ssh-keygen', '-lf', str(public), '-E', 'sha256'],
+                                              text=True).split()[1]
+        require(fingerprint == KEY, 'Publisher authority key changed')
         signers = Path(temp) / 'signers'
-        signers.write_text('ajlennon@dynamicdevices.co.uk ' + key.read_text().strip() + '\n')
+        signers.write_bytes(b'ajlennon@dynamicdevices.co.uk ' + verified_key + b'\n')
         p = subprocess.run(['ssh-keygen', '-Y', 'verify', '-f', str(signers), '-I',
                             'ajlennon@dynamicdevices.co.uk', '-n', NAMESPACE, '-s',
                             str(folder / 'preloop-publication-authority.json.sig')], input=raw,
@@ -170,6 +176,8 @@ def load_authority(folder, repository, now=None):
     grant = json.loads(raw)
     clock = now or dt.datetime.now(dt.timezone.utc)
     authority = grant['publisher_authority']
+    require('.github/preloop-publication-key.pub' in authority['files'],
+            'Publisher public key missing from source manifest')
     issued = dt.datetime.fromisoformat(authority['issued_at'])
     expires = dt.datetime.fromisoformat(authority['expires_at'])
     require(issued <= clock < expires, 'Publisher authority not currently valid')

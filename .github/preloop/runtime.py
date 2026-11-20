@@ -315,8 +315,15 @@ def full_diff_sha256(repository, base, head, github_token):
         env.pop('GIT_CONFIG_VALUE_0')
         env['GIT_CONFIG_COUNT'] = '0'
         merge_base = git('merge-base', base, head).decode().strip()
+        require(merge_base == base,
+                'PR target tip differs from merge base; update the branch before review')
+        numstat = git('diff', '--no-ext-diff', '--no-textconv', '--no-renames',
+                      '--numstat', base, head, '--')
+        require(not any(line.split(b'\t', 2)[:2] == [b'-', b'-']
+                        for line in numstat.splitlines()),
+                'Binary changes are unsupported by this source-only review route')
         with tempfile.TemporaryFile() as diff:
-            git(*trust.DIFF_ARGS, merge_base, head, '--', output=diff)
+            git(*trust.DIFF_ARGS, base, head, '--', output=diff)
             diff.seek(0)
             return hashlib.file_digest(diff, 'sha256').hexdigest()
 
