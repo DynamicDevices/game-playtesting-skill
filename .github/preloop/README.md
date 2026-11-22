@@ -1,4 +1,21 @@
-# Shared Preloop review publication — integration candidate
+# Legacy Actions integration reference — not the active review route
+
+Gameplay now uses the shared DD flow's native Preloop GitHub App trigger and
+controller publication. See [the current delivery guide](../PRELOOP-TROUBLESHOOTING.md)
+and [contribution requirements](../../CONTRIBUTING.md). Require the genuine
+App-produced `preloop/review` status plus both existing CI checks, with strict
+up-to-date branch protection. Failed, incomplete, stale and placeholder reviews
+still block merging.
+
+The four legacy review workflows are disabled during the approved transition.
+The material below describes the retained implementation and historical evidence,
+not setup instructions or an authorised fallback. Do not re-enable it, provision
+a callback token, deploy its signed historical policies, or create another flow
+to work around a native failure. Useful tests and historical source remain while
+their retirement is reviewed separately. A configuration change is not proof of
+a successful native review or automatic merge.
+
+## Historical integration candidate
 
 The DD integration has signed service authority and is activated. Automatic
 triggering and hosted review have been observed, but end-to-end publication and
