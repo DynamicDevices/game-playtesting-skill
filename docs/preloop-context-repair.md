@@ -1,4 +1,13 @@
-# Proposed native review context correction
+# Historical review-context correction — not current setup
+
+This is retained evidence for the retired Actions publisher integration, not
+instructions to configure today's shared DD flow. Do not apply its prompt,
+publisher or activation proposals. Gameplay now uses native App events and
+controller publication; see the [current delivery guide](../.github/PRELOOP-TROUBLESHOOTING.md)
+and [native acceptance procedure](preloop-live-acceptance.md). The old merge
+gate intentionally freezes merging until the native transition is accepted.
+
+## Historical proposal
 
 The real Nail pilot reached native completion but returned forty zeroes for
 both commit IDs. The publisher rejected it. Its resolved prompt contained no

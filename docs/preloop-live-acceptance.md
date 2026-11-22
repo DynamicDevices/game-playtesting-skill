@@ -1,57 +1,77 @@
-# Automatic Preloop review acceptance
+# Automatic native Preloop review acceptance
 
-This procedure checks the normal PR-review route for this public repository.
-A successful configuration check or an old recovered review does not establish
-that a new PR can complete that route.
+This procedure checks the shared DD flow's native GitHub App route for this
+repository. Configuration, an old recovered review or local tests do not prove
+that a new PR completes it. See the [delivery guide](../.github/PRELOOP-TROUBLESHOOTING.md).
 
 ## Start with a real PR event
 
-Use a documentation-only PR with a useful, reviewable change. Record the PR
-number, exact head and base commits, and full diff digest before assessing the
-result. The ordinary PR event must start the existing review workflow; a manual
-flow dispatch does not prove automatic triggering. Keep that candidate frozen
-through completion, and report a changed head or base rather than accepting a
-review against an earlier revision.
+Use a ready, same-repository PR containing a useful, reviewable change. Under
+live signed authority, record the PR number, exact head, target tip, merge base
+and complete diff identity. Arm authenticated completion before the event.
+The ordinary opened or updated PR event must start the existing native DD flow;
+manual dispatch does not prove automatic triggering. Do not enable the retired
+Actions trigger, publisher, finalizer or merger, or create another flow.
 
-Use the normal signed service policy. The consumed PR14 publication-recovery
-exception is not a normal-operation policy and must not be reused for a new PR.
-Do not change the provider, flow, credentials or security checks for this test.
+Keep the candidate frozen through completion. A changed head or target requires
+fresh review of the current candidate, not acceptance of an earlier result.
+Preserve the admitted provider, model, credentials and security checks.
 
 ## Check the workload and its result
 
-Record the triggering Actions run and the corresponding Preloop execution.
-Require native repository clone and exact-checkout evidence, the complete bound
-diff, and matching head, base, challenge and result digest. Startup acceptance
-alone is not proof of checkout or a completed review. If startup proof is pending,
-publication must still require the completed proof.
+Record the native execution URL and its repository, PR, flow revision and event
+bindings. Perform one startup validation, then use authenticated completion
+events. Require evidence of native clone, exact checkout and complete diff
+inspection. A running agent, a model's assertion or a nonzero count of diff
+commands alone does not prove those requirements. Missing evidence blocks
+delivery acceptance; do not invent a receipt or substitute copied source.
 
-Keep every finding, including LOW findings. Reject placeholders, incomplete
-findings and contradictions between execution success, verdict and findings.
-A terminal execution alone is not proof that GitHub received the result.
+Read the authoritative complete result and its schema validation. Match head and
+merge base to the current PR and verify captured evidence/digests through the
+supported native evidence interfaces. Archive availability marked `not_checked`
+is not integrity verification: downloading verifies the archive digest.
+Keep all findings, including LOW findings. A pass requires success=true and no
+blocking findings. Changes requested or errors require success=false. Reject
+placeholders, missing fields, contradictory passes and all-zero revision IDs.
+For acceptance, `changes_requested` must identify at least one MEDIUM, HIGH or
+CRITICAL finding. Do not assume the native schema enforces every rule in the
+retained legacy validator; check the actual result as well as schema validity.
 
 ## Check actual GitHub delivery
 
-After authenticated completion, verify the actual publisher and completion
-finalizer runs, their required steps and durable evidence. Independently read
-back the authorised bot review and the real check and commit status on the exact
-PR revision. Their contents and verdict must agree with the validated result.
-Duplicate or stale posts and a manually manufactured green status are failures.
+Preloop's controller, not the model or an Actions publisher, posts the review
+and `preloop/review` commit status. Verify automatic tracker-event publication
+and independently read back the authentic Preloop App review on the exact head,
+its complete readable findings and matching status linking to the execution.
+Pass maps to success; blocking findings map to failure; errors and incomplete
+reviews must not become green. Pending publication is not delivered review.
+Recover a valid result using supported idempotent native publication under exact
+preconditions and applicable authority; do not rerun inference just to post it.
+A manual recovery does not prove automatic publication.
 
-Normal publication starts with unfinished-check semantics. Only the admitted
-completion finalizer may release the final verdict after verifying the completed
-producer and its evidence. The old retained-failure recovery is not applicable.
+## Check protection and merge
+
+Both required CI checks, `Preloop contracts` and `Native prompt regressions`,
+must pass on the current head. Preserve strict up-to-date protection, admin
+enforcement and all other controls. During migration, retain the old required
+`Preloop merge gate` until the specifically approved native transition has its
+delivery evidence. This is an intentional merge freeze: the legacy producer is
+disabled, so new heads cannot satisfy that gate. Native review and CI may run,
+but merges remain blocked until the separately accepted gate replacement.
+Do not fabricate its success or bypass it to finish a test.
+After the separately accepted gate replacement, require `preloop/review` bound
+to the Preloop App alongside those two CI checks. Only then enable covered
+native automatic squash merge and verify the actual protected merge.
 
 ## State the outcome accurately
 
-Report automatic triggering, review completion and GitHub delivery separately.
-A correctly delivered review containing blocking findings proves delivery, not
-approval of the change. Pending work, skipped checks or configuration-only
-success must not be reported as a passed end-to-end test.
+Report automatic triggering, review completion, automatic publication, required
+CI and actual merge separately. A delivered review with blocking findings proves
+review delivery, not approval. Briar fixes findings, tests and pushes the
+correction; the normal native updated event starts the corrected-head review.
+Retain the first failed execution. Do not use empty commits, draft toggles,
+unchanged paid retries, provider fallback or replacement green statuses.
+Unsupported native behaviour goes to Preloop support. A verdict alone is not
+merge authority; trust/security and production changes retain explicit approval.
 
-On failure, retain the first failed execution and identify its failed phase.
-Do not repeat a paid review without a concrete correction and the required
-authority. Use authenticated completion events rather than repeated status
-polling. For explicitly admitted ordinary Briar PRs, use signed automatic-merge
-authority and GitHub's enforced `Preloop merge gate`, required CI and strict
-up-to-date-base checks. A review verdict alone is not merge authority. Trust,
-security and production changes retain their separate explicit approval.
+Assisted-by: Briar.
