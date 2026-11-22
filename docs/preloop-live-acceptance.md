@@ -33,6 +33,9 @@ is not integrity verification: downloading verifies the archive digest.
 Keep all findings, including LOW findings. A pass requires success=true and no
 blocking findings. Changes requested or errors require success=false. Reject
 placeholders, missing fields, contradictory passes and all-zero revision IDs.
+For acceptance, `changes_requested` must identify at least one MEDIUM, HIGH or
+CRITICAL finding. Do not assume the native schema enforces every rule in the
+retained legacy validator; check the actual result as well as schema validity.
 
 ## Check actual GitHub delivery
 
@@ -52,7 +55,10 @@ Both required CI checks, `Preloop contracts` and `Native prompt regressions`,
 must pass on the current head. Preserve strict up-to-date protection, admin
 enforcement and all other controls. During migration, retain the old required
 `Preloop merge gate` until the specifically approved native transition has its
-delivery evidence. Do not fabricate its success or bypass it to finish a test.
+delivery evidence. This is an intentional merge freeze: the legacy producer is
+disabled, so new heads cannot satisfy that gate. Native review and CI may run,
+but merges remain blocked until the separately accepted gate replacement.
+Do not fabricate its success or bypass it to finish a test.
 After the separately accepted gate replacement, require `preloop/review` bound
 to the Preloop App alongside those two CI checks. Only then enable covered
 native automatic squash merge and verify the actual protected merge.

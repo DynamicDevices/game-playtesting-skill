@@ -20,7 +20,10 @@ A result for an older commit or target does not describe the current candidate.
    reviews must not become green. Verify actual publication, not only the saved
    flow settings or execution state. The controller posts; the model remains
    read-only and must not receive publication credentials.
-4. **CI and merge:** `Preloop contracts` and `Native prompt regressions` remain
+4. **CI and merge:** While the old `Preloop merge gate` remains required with
+   its producer disabled, merges are intentionally frozen, even if native review
+   passes. Do not bypass it. Only the separately accepted migration may replace
+   it with the App-bound native status. `Preloop contracts` and `Native prompt regressions` remain
    required. Strict up-to-date branch protection and admin enforcement remain
    enabled. Verify the review still describes the current head and target before
    enabling native automatic squash merge under live authority. A changed target
