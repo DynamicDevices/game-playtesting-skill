@@ -40,14 +40,16 @@ failure from its actual execution and use Preloop support when needed.
 
 ## Useful failure report
 
-Include the PR URL, current head and target SHAs, execution URL when available,
-Actions run URL, failed phase and a short sanitized error. State whether a
+Include the PR URL, current head and target SHAs, Preloop execution/publication
+URL when available, failed phase and a short sanitized error. Include an Actions
+run URL only for a CI failure, not as evidence of a native review. State whether a
 complete result and a matching bot post exist. Do not include credentials,
 raw private logs or unrelated source. Preserve the original failed run so a
 later correction can be compared against it.
 
 This guide describes evidence, not an alternative approval or retry procedure.
-The [contribution requirements](../CONTRIBUTING.md) and
-[integration documentation](preloop/README.md) remain applicable.
+The [contribution requirements](../CONTRIBUTING.md) remain applicable.
+The [legacy integration reference](preloop/README.md) is historical only;
+do not apply its setup or operation instructions.
 
 Assisted-by: Briar.

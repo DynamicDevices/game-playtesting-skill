@@ -1,4 +1,14 @@
-# One-shot Preloop reproduction
+# Historical one-shot Preloop reproduction — inactive
+
+The procedure below belongs to the retired Actions integration. Its trigger
+workflow is disabled, so this procedure is unavailable and is not an authorised
+fallback. Do not dispatch or re-enable it. For native review failures use the
+[current delivery guide](../.github/PRELOOP-TROUBLESHOOTING.md): retain the existing
+execution and diagnose its failed phase. Recover valid results through supported
+native publication, not a second inference run. An unchanged failed review does
+not authorise a diagnostic retry; unsupported behaviour goes to Preloop support.
+
+## Retained historical procedure
 
 This manual diagnostic is not a successful PR review or a repair to Preloop.
 It can reproduce an invalid result on an unchanged candidate without deleting
